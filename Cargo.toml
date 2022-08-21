@@ -1,0 +1,17 @@
+[package]
+name = "gmail_stats"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.62"
+futures = "0.3.23"
+google-gmail1 = "3.1.0"
+hyper-rustls = { version = "0.23.0", features = ["rustls-native-certs"] }
+rustls-native-certs = "0.6.2"
+serde = "^1.0"
+serde_json = "^1.0"
+sqlx = { version = "0.6", features = [ "runtime-tokio-rustls", "sqlite" ] }
+tokio = { version = "1.20.1", features = ["rt-multi-thread"] }
