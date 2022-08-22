@@ -3,22 +3,27 @@ use std::str::FromStr;
 use futures::TryStreamExt;
 use google_gmail1::api::Message;
 use google_gmail1::{api::Scope, hyper, hyper_rustls, oauth2, Gmail};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous};
-use sqlx::{Pool, Row, Sqlite};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Pool, Row, Sqlite, SqliteExecutor, Transaction};
+use tokio::task;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // TODO: use tokio::spawn and sqlite transactions to make fetching concurrent
     // Also add DB schema and migrations
-    let options = SqliteConnectOptions::from_str("sqlite://./stats.db")?
-        // WAL mode should be much faster for concurrent reads and writes
-        .journal_mode(SqliteJournalMode::Wal)
-        // Synchronous mode is OK because a transaction may roll back during a crash, however
-        // all mail listings are re-fetched during each run.
-        .synchronous(SqliteSynchronous::Normal)
-        .shared_cache(true);
+    let options = SqliteConnectOptions::from_str("sqlite://./stats.db")?;
+    // WAL mode should be much faster for concurrent reads and writes
+    // .journal_mode(SqliteJournalMode::Wal)
+    // Synchronous mode is OK because a transaction may roll back during a crash, however
+    // all mail listings are re-fetched during each run.
+    // .synchronous(SqliteSynchronous::Normal)
+    // .shared_cache(true);
 
-    let pool = Pool::<Sqlite>::connect_with(options).await?;
+    // let pool = Pool::<Sqlite>::connect_with(options).await?;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(100)
+        .connect_with(options)
+        .await?;
 
     // Read application OAuth secret from a file.
     let secret = oauth2::read_application_secret("credentials.json")
@@ -51,9 +56,11 @@ async fn main() -> anyhow::Result<()> {
         auth,
     );
 
+    // Some kind of exponential backpressure on a worker would be nicer
     let mut retries = 0;
     loop {
-        retries += 1;
+        // TODO: lol handle these better, i keep getting deadlocks but wanna just churn some emails
+        // retries += 1;
         if retries > 3 {
             panic!("Too many retries");
         }
@@ -106,40 +113,63 @@ async fn parse_messages(
     hub: &mut Gmail,
 ) -> anyhow::Result<()> {
     // Then fetch each individual message and increment the counter for the sender.
+    let mut handles = Vec::new();
+    // TODO: this results in DB deadlocks :(
     for message_meta in messages {
-        if !seen_mail(message_meta.id.as_ref().expect("message missing id"), pool).await? {
-            let message = hub
-                .users()
-                .messages_get("me", &message_meta.id.expect("message missing id"));
+        let pool = pool.clone();
+        let hub = hub.clone();
+        let handle = task::spawn(async move {
+            // Begin a new transaction for each message, to avoid concurrent reads/writes on the same message IDs.
+            let mut tx = pool.begin().await?;
+            println!("Processing message: {:?}", message_meta.id);
+            if !seen_mail(
+                message_meta.id.as_ref().expect("message missing id"),
+                &mut tx,
+            )
+            .await?
+            {
+                let message = hub
+                    .users()
+                    .messages_get("me", &message_meta.id.expect("message missing id"));
 
-            let message = message.add_scope(Scope::Readonly);
+                let message = message.add_scope(Scope::Readonly);
 
-            let message = message.doit().await?.1;
-            println!(
-                "sender: {:?}",
-                message
-                    .clone()
-                    .payload
-                    .unwrap_or_default()
-                    .headers
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|header| header.name == Some("From".to_string()))
-                    .collect::<Vec<_>>()
-            );
+                let message = message.doit().await?.1;
+                println!(
+                    "sender: {:?}",
+                    message
+                        .clone()
+                        .payload
+                        .unwrap_or_default()
+                        .headers
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|header| header.name == Some("From".to_string()))
+                        .collect::<Vec<_>>()
+                );
 
-            mark_seen(&message, pool).await?;
-            increment_sender_mails(&message, pool).await?;
-        }
+                mark_seen(&message, &mut tx).await?;
+                increment_sender_mails(&message, &mut tx).await?;
+            }
+            tx.commit().await?;
+
+            Ok::<(), anyhow::Error>(())
+        });
+        handles.push(handle);
+    }
+
+    // join each handle
+    for handle in handles {
+        handle.await??;
     }
 
     Ok(())
 }
 
-async fn seen_mail(message_id: &str, pool: &Pool<Sqlite>) -> anyhow::Result<bool> {
+async fn seen_mail(message_id: &str, executor: impl SqliteExecutor<'_>) -> anyhow::Result<bool> {
     let mut res = sqlx::query("SELECT count(1) AS ct FROM seen_mails WHERE mail_id = ?")
         .bind(message_id)
-        .fetch(pool);
+        .fetch(executor);
     while let Some(row) = res.try_next().await? {
         let count: u32 = row.try_get("ct")?;
         if count > 0 {
@@ -149,39 +179,48 @@ async fn seen_mail(message_id: &str, pool: &Pool<Sqlite>) -> anyhow::Result<bool
     Ok(false)
 }
 
-async fn mark_seen(message: &Message, pool: &Pool<Sqlite>) -> anyhow::Result<()> {
+async fn mark_seen(message: &Message, executor: impl SqliteExecutor<'_>) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO seen_mails (mail_id) VALUES (?)")
         .bind(message.id.as_ref().expect("message missing id"))
-        .execute(pool)
+        .execute(executor)
         .await?;
     Ok(())
 }
 
-async fn increment_sender_mails(message: &Message, pool: &Pool<Sqlite>) -> anyhow::Result<()> {
+async fn increment_sender_mails(
+    message: &Message,
+    tx: &mut Transaction<'_, Sqlite>,
+) -> anyhow::Result<()> {
     let sender = get_sender(message)?;
-    let mut res = sqlx::query("SELECT mails_sent FROM senders WHERE sender = ?")
+    let row = sqlx::query("SELECT mails_sent FROM senders WHERE sender = ?")
         .bind(&sender)
-        .fetch(pool);
-    if let Some(row) = res.try_next().await? {
-        let mut mails_sent = 0;
-        let count: u32 = row.try_get("mails_sent")?;
-        if count > 0 {
-            mails_sent = count;
-        }
-
-        mails_sent += 1;
-        sqlx::query("UPDATE senders SET mails_sent = ? WHERE sender = ?")
-            .bind(mails_sent)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if row.is_none() {
+        // no match
+        sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES (?, 1)")
             .bind(&sender)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
 
         return Ok(());
     }
 
-    sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES (?, 1)")
+    let row = row.unwrap();
+    let mut mails_sent = 0;
+    let count = row.try_get("mails_sent");
+
+    let count = count?;
+
+    if count > 0 {
+        mails_sent = count;
+    }
+
+    mails_sent += 1;
+    sqlx::query("UPDATE senders SET mails_sent = ? WHERE sender = ?")
+        .bind(mails_sent)
         .bind(&sender)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     Ok(())
