@@ -3,13 +3,22 @@ use std::str::FromStr;
 use futures::TryStreamExt;
 use google_gmail1::api::Message;
 use google_gmail1::{api::Scope, hyper, hyper_rustls, oauth2, Gmail};
+use lazy_static::lazy_static;
+use regex::Regex;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite, SqliteExecutor, Transaction};
 use tokio::task;
 
+lazy_static! {
+    static ref EMAIL_RE_1: Regex =
+        Regex::new(r"^[^<]*<?([\w\-\.]+@([\w-]+\.)+[\w-]{2,4}).*$").unwrap();
+    static ref EMAIL_RE_2: Regex = Regex::new(r"^([\w\-\.]+@([\w-]+\.)+[\w-]{2,4})$").unwrap();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // TODO: use tokio::spawn and sqlite transactions to make fetching concurrent
+    // TODO: there's a rate limit on google's side, so we should have some kind of backpressure
     // Also add DB schema and migrations
     let options = SqliteConnectOptions::from_str("sqlite://./stats.db")?;
     // WAL mode should be much faster for concurrent reads and writes
@@ -113,55 +122,54 @@ async fn parse_messages(
     hub: &mut Gmail,
 ) -> anyhow::Result<()> {
     // Then fetch each individual message and increment the counter for the sender.
-    let mut handles = Vec::new();
+    // let mut handles = Vec::new();
     // TODO: this results in DB deadlocks :(
     for message_meta in messages {
         let pool = pool.clone();
         let hub = hub.clone();
-        let handle = task::spawn(async move {
-            // Begin a new transaction for each message, to avoid concurrent reads/writes on the same message IDs.
-            let mut tx = pool.begin().await?;
-            println!("Processing message: {:?}", message_meta.id);
-            if !seen_mail(
-                message_meta.id.as_ref().expect("message missing id"),
-                &mut tx,
-            )
-            .await?
-            {
-                let message = hub
-                    .users()
-                    .messages_get("me", &message_meta.id.expect("message missing id"));
+        // let handle = task::spawn(async move {
+        // Begin a new transaction for each message, to avoid concurrent reads/writes on the same message IDs.
+        let mut tx = pool.begin().await?;
+        if !seen_mail(
+            message_meta.id.as_ref().expect("message missing id"),
+            &mut tx,
+        )
+        .await?
+        {
+            let message = hub
+                .users()
+                .messages_get("me", &message_meta.id.expect("message missing id"));
 
-                let message = message.add_scope(Scope::Readonly);
+            let message = message.add_scope(Scope::Readonly);
 
-                let message = message.doit().await?.1;
-                println!(
-                    "sender: {:?}",
-                    message
-                        .clone()
-                        .payload
-                        .unwrap_or_default()
-                        .headers
-                        .unwrap_or_default()
-                        .iter()
-                        .filter(|header| header.name == Some("From".to_string()))
-                        .collect::<Vec<_>>()
-                );
+            let message = message.doit().await?.1;
+            println!(
+                "sender: {:?}",
+                message
+                    .clone()
+                    .payload
+                    .unwrap_or_default()
+                    .headers
+                    .unwrap_or_default()
+                    .iter()
+                    .filter(|header| header.name == Some("From".to_string()))
+                    .collect::<Vec<_>>()
+            );
 
-                mark_seen(&message, &mut tx).await?;
-                increment_sender_mails(&message, &mut tx).await?;
-            }
-            tx.commit().await?;
+            mark_seen(&message, &mut tx).await?;
+            increment_sender_mails(&message, &mut tx).await?;
+        }
+        tx.commit().await?;
 
-            Ok::<(), anyhow::Error>(())
-        });
-        handles.push(handle);
+        // Ok::<(), anyhow::Error>(())
+        // });
+        // handles.push(handle);
     }
 
     // join each handle
-    for handle in handles {
-        handle.await??;
-    }
+    // for handle in handles {
+    //     handle.await??;
+    // }
 
     Ok(())
 }
@@ -191,7 +199,7 @@ async fn increment_sender_mails(
     message: &Message,
     tx: &mut Transaction<'_, Sqlite>,
 ) -> anyhow::Result<()> {
-    let sender = get_sender(message)?;
+    let sender = cleanup_sender(get_sender(message)?);
     let row = sqlx::query("SELECT mails_sent FROM senders WHERE sender = ?")
         .bind(&sender)
         .fetch_optional(&mut *tx)
@@ -226,8 +234,24 @@ async fn increment_sender_mails(
     Ok(())
 }
 
+// Attempt to extract a formatted email address, or just return the original value
+fn cleanup_sender(sender: String) -> String {
+    let mut clean_sender = sender.clone();
+    if sender.contains("<") {
+        for cap in EMAIL_RE_1.captures_iter(&sender) {
+            clean_sender = cap[1].to_string();
+        }
+    } else {
+        for cap in EMAIL_RE_2.captures_iter(&sender) {
+            clean_sender = cap[1].to_string();
+        }
+    }
+
+    clean_sender
+}
+
 fn get_sender(message: &Message) -> anyhow::Result<String> {
-    let from_headers = message
+    let mut from_headers = message
         .clone()
         .payload
         .unwrap_or_default()
@@ -239,7 +263,7 @@ fn get_sender(message: &Message) -> anyhow::Result<String> {
         .collect::<Vec<_>>();
 
     if from_headers.is_empty() {
-        let from_headers = message
+        from_headers = message
             .clone()
             .payload
             .unwrap_or_default()
@@ -250,9 +274,23 @@ fn get_sender(message: &Message) -> anyhow::Result<String> {
             .cloned()
             .collect::<Vec<_>>();
 
+        // TODO: lol this is dumb, should have a Vec<String> of headers instead of this weird mess
         if from_headers.is_empty() {
-            println!("weird email without from header: {:?}", message);
-            return Ok("".to_string());
+            from_headers = message
+                .clone()
+                .payload
+                .unwrap_or_default()
+                .headers
+                .unwrap_or_default()
+                .iter()
+                .filter(|header| header.name == Some("Return-Path".to_string()))
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if from_headers.is_empty() {
+                println!("weird email without from header: {:?}", message);
+                return Ok("".to_string());
+            }
         }
         return Ok(from_headers[0]
             .value
