@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite, SqliteExecutor, Transaction};
-use tokio::task;
 
 lazy_static! {
     static ref EMAIL_RE_1: Regex =
@@ -66,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Some kind of exponential backpressure on a worker would be nicer
-    let mut retries = 0;
+    let retries = 0;
     loop {
         // TODO: lol handle these better, i keep getting deadlocks but wanna just churn some emails
         // retries += 1;
