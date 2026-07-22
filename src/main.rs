@@ -251,57 +251,26 @@ fn cleanup_sender(sender: String) -> String {
 }
 
 fn get_sender(message: &Message) -> anyhow::Result<String> {
-    let mut from_headers = message
-        .clone()
+    // Header names are case-insensitive (RFC 5322); check candidates in priority order.
+    const CANDIDATES: [&str; 2] = ["from", "return-path"];
+    let headers = message
         .payload
-        .unwrap_or_default()
-        .headers
-        .unwrap_or_default()
-        .iter()
-        .filter(|header| header.name == Some("From".to_string()))
-        .cloned()
-        .collect::<Vec<_>>();
+        .as_ref()
+        .and_then(|p| p.headers.as_deref())
+        .unwrap_or(&[]);
 
-    if from_headers.is_empty() {
-        from_headers = message
-            .clone()
-            .payload
-            .unwrap_or_default()
-            .headers
-            .unwrap_or_default()
-            .iter()
-            .filter(|header| header.name == Some("FROM".to_string()))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        // TODO: lol this is dumb, should have a Vec<String> of headers instead of this weird mess
-        if from_headers.is_empty() {
-            from_headers = message
-                .clone()
-                .payload
-                .unwrap_or_default()
-                .headers
-                .unwrap_or_default()
-                .iter()
-                .filter(|header| header.name == Some("Return-Path".to_string()))
-                .cloned()
-                .collect::<Vec<_>>();
-
-            if from_headers.is_empty() {
-                println!("weird email without from header: {:?}", message);
-                return Ok("".to_string());
-            }
+    for candidate in CANDIDATES {
+        if let Some(value) = headers.iter().find_map(|header| {
+            header
+                .name
+                .as_deref()
+                .filter(|name| name.eq_ignore_ascii_case(candidate))
+                .and(header.value.as_deref())
+        }) {
+            return Ok(value.to_string());
         }
-        return Ok(from_headers[0]
-            .value
-            .as_ref()
-            .expect("expected sender for mail")
-            .to_string());
     }
 
-    Ok(from_headers[0]
-        .value
-        .as_ref()
-        .expect("expected sender for mail")
-        .to_string())
+    println!("weird email without from header: {:?}", message.id);
+    Ok(String::new())
 }
