@@ -27,7 +27,7 @@ const DEFAULT_FETCH_CONCURRENCY: usize = 8;
 /// env var (useful for projects with a lower per-user quota).
 const DEFAULT_RATE_LIMIT_MS: u64 = 25;
 /// How many times to retry a single API call (messages.list or messages.get)
-/// on a rate-limit response.
+/// on a transient error (rate limit, 5xx, or network failure).
 const MAX_FETCH_RETRIES: u32 = 5;
 
 /// A fetched message's result, sent to the single DB writer task.
@@ -117,12 +117,31 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Retry a failed run a few times, backing off exponentially between
-    // attempts (see the sleep at the bottom of the loop body).
+    // attempts (see the sleep at the bottom of the loop body). The retry
+    // budget is per plateau, not per process: whenever an attempt makes
+    // forward progress (completes at least one page) the counter resets, so
+    // sporadic transient errors spread across a long scan can never
+    // accumulate into an abort — only repeated failures with no progress in
+    // between exhaust the budget.
     let mut retries = 0;
+    let mut pages_done: u64 = 0;
     loop {
-        match work(&pool, &hub, &write_tx, &rate_limiter, fetch_concurrency).await {
+        let pages_before = pages_done;
+        match work(
+            &pool,
+            &hub,
+            &write_tx,
+            &rate_limiter,
+            fetch_concurrency,
+            &mut pages_done,
+        )
+        .await
+        {
             Ok(()) => break,
             Err(e) => {
+                if pages_done > pages_before {
+                    retries = 0;
+                }
                 retries += 1;
                 if retries > 3 {
                     // Quiesce the writer before bailing, same as the retry
@@ -252,6 +271,7 @@ async fn work(
     write_tx: &mpsc::Sender<SeenMail>,
     rate_limiter: &Arc<Mutex<Interval>>,
     fetch_concurrency: usize,
+    pages_done: &mut u64,
 ) -> anyhow::Result<()> {
     // Fetch 500 messages at a time...
     let mut page_token: Option<String> = None;
@@ -269,6 +289,11 @@ async fn work(
         )
         .await?;
 
+        // Completing a page is forward progress: the caller uses this to
+        // reset its retry budget so a long scan isn't aborted by transient
+        // errors accumulated across otherwise-successful attempts.
+        *pages_done += 1;
+
         match next_page_token {
             Some(token) => page_token = Some(token),
             None => break,
@@ -279,10 +304,10 @@ async fn work(
 }
 
 /// List one page of messages, waiting for a rate-limit tick before each
-/// attempt and backing off exponentially on 429/403 rate-limit responses —
-/// the same treatment fetch_message gives messages.get. Without this, a
-/// rate-limited list call would propagate out of work() and restart the
-/// entire mailbox scan from page one.
+/// attempt and backing off exponentially on transient errors (rate limits,
+/// 5xx responses, network failures) — the same treatment fetch_message gives
+/// messages.get. Without this, a transient list failure would propagate out
+/// of work() and restart the entire mailbox scan from page one.
 async fn list_messages(
     hub: &GmailHub,
     page_token: Option<&str>,
@@ -304,11 +329,11 @@ async fn list_messages(
 
         match call.doit().await {
             Ok((_, response)) => return Ok(response),
-            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_rate_limit_error(e) => {
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_retryable_error(e) => {
                 attempts += 1;
                 println!(
-                    "rate limited listing messages (attempt {}), backing off for {:?}",
-                    attempts, backoff
+                    "transient error listing messages (attempt {}), backing off for {:?}: {}",
+                    attempts, backoff, e
                 );
                 tokio::time::sleep(backoff).await;
                 backoff *= 2;
@@ -355,7 +380,8 @@ async fn parse_messages(
 }
 
 /// Fetch a single message, waiting for a rate-limit tick before each attempt
-/// and backing off exponentially on 429/403 rate-limit responses.
+/// and backing off exponentially on transient errors (rate limits, 5xx
+/// responses, network failures).
 async fn fetch_message(
     hub: &GmailHub,
     message_id: &str,
@@ -375,11 +401,11 @@ async fn fetch_message(
 
         match res {
             Ok((_, message)) => return Ok(message),
-            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_rate_limit_error(e) => {
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_retryable_error(e) => {
                 attempts += 1;
                 println!(
-                    "rate limited fetching {} (attempt {}), backing off for {:?}",
-                    message_id, attempts, backoff
+                    "transient error fetching {} (attempt {}), backing off for {:?}: {}",
+                    message_id, attempts, backoff, e
                 );
                 tokio::time::sleep(backoff).await;
                 backoff *= 2;
@@ -389,21 +415,33 @@ async fn fetch_message(
     }
 }
 
-/// Whether an API error is a rate-limit response that warrants backoff and retry.
+/// Whether an API error is transient and warrants backoff and retry: a
+/// rate-limit response, a retryable 5xx server error, or a network-level
+/// failure (connection reset, TLS hiccup, truncated body). A long scan makes
+/// hundreds of thousands of requests, so sporadic errors from all three
+/// classes are expected and must be retried in place — propagating them
+/// aborts the page and restarts the whole mailbox scan from page one.
 ///
 /// The client library returns `Error::BadRequest(json)` when a non-success
 /// response body parses as JSON, and `Error::Failure(response)` only when it
-/// does not. Gmail's 429 (`rateLimitExceeded`/`RESOURCE_EXHAUSTED`) and
-/// rate-limit 403 (`userRateLimitExceeded`) responses carry Google's standard
-/// JSON error envelope, so they arrive as `BadRequest` and must be recognized
-/// by inspecting the embedded error code/status/reason.
-fn is_rate_limit_error(err: &google_gmail1::Error) -> bool {
+/// does not. Gmail's 429 (`rateLimitExceeded`/`RESOURCE_EXHAUSTED`),
+/// rate-limit 403 (`userRateLimitExceeded`), and sporadic 5xx
+/// (`UNAVAILABLE`/`backendError`) responses all carry Google's standard JSON
+/// error envelope, so they arrive as `BadRequest` and must be recognized by
+/// inspecting the embedded error code/status/reason.
+fn is_retryable_error(err: &google_gmail1::Error) -> bool {
     match err {
         google_gmail1::Error::BadRequest(value) => {
             let error = &value["error"];
-            if error["code"].as_u64() == Some(429)
-                || error["status"].as_str() == Some("RESOURCE_EXHAUSTED")
-            {
+            // 429s and 5xx server errors are standard retry-with-backoff
+            // material per Google's API guidance.
+            if matches!(error["code"].as_u64(), Some(429) | Some(500..=599)) {
+                return true;
+            }
+            if matches!(
+                error["status"].as_str(),
+                Some("RESOURCE_EXHAUSTED") | Some("UNAVAILABLE") | Some("INTERNAL")
+            ) {
                 return true;
             }
             // Rate-limit 403s are distinguished from permission 403s by their
@@ -411,15 +449,20 @@ fn is_rate_limit_error(err: &google_gmail1::Error) -> bool {
             error["errors"].as_array().into_iter().flatten().any(|e| {
                 matches!(
                     e["reason"].as_str(),
-                    Some("rateLimitExceeded") | Some("userRateLimitExceeded")
+                    Some("rateLimitExceeded")
+                        | Some("userRateLimitExceeded")
+                        | Some("backendError")
                 )
             })
         }
         // Non-JSON error bodies: fall back to the HTTP status code.
         google_gmail1::Error::Failure(response) => {
-            let status = response.status().as_u16();
-            status == 429 || status == 403
+            let status = response.status();
+            status.as_u16() == 429 || status.as_u16() == 403 || status.is_server_error()
         }
+        // Network-level transients: connection resets, TLS handshake
+        // failures, and I/O errors reading the response body.
+        google_gmail1::Error::HttpError(_) | google_gmail1::Error::Io(_) => true,
         _ => false,
     }
 }
