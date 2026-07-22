@@ -63,7 +63,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Loopback only, structurally. The port is the only knob.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-    println!("gmail-stats web viewer listening on http://127.0.0.1:{port}/");
+    // Report the bound address, not the requested port: with port 0 the OS
+    // picks an ephemeral port, and the printed URL must be the real one.
+    let local_addr = listener.local_addr()?;
+    println!("gmail-stats web viewer listening on http://{local_addr}/");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -134,20 +137,20 @@ async fn build_summary(pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Err
         .await?;
 
     // The app assumes one row per sender but nothing enforces it, so merge
-    // here. CAST guards the affinity-less mails_sent column against stray
-    // TEXT values.
-    let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
-        "SELECT sender, COALESCE(SUM(CAST(mails_sent AS INTEGER)), 0) AS mails_sent \
-         FROM senders GROUP BY sender ORDER BY mails_sent DESC",
+    // here. COALESCE folds NULL senders into '' *before* grouping so they
+    // merge with literal-'' rows instead of forming a separate group. CAST
+    // guards the affinity-less mails_sent column against stray TEXT values.
+    let rows: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT COALESCE(sender, '') AS sender, \
+                COALESCE(SUM(CAST(mails_sent AS INTEGER)), 0) AS mails_sent \
+         FROM senders GROUP BY COALESCE(sender, '') ORDER BY mails_sent DESC",
     )
     .fetch_all(pool)
     .await?;
 
     let senders: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(sender, mails_sent)| {
-            json!({ "sender": sender.unwrap_or_default(), "mails_sent": mails_sent })
-        })
+        .map(|(sender, mails_sent)| json!({ "sender": sender, "mails_sent": mails_sent }))
         .collect();
 
     let generated_at_unix = SystemTime::now()
