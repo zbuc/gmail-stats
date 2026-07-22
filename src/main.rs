@@ -43,6 +43,11 @@ gmail_stats - collect per-sender mail counts into a local SQLite database
 USAGE:
     gmail_stats [scan] [OPTIONS]           scan Gmail over the API (OAuth; the default)
     gmail_stats import <PATH> [OPTIONS]    import a Google Takeout mbox export
+    gmail_stats scan --backfill-message-ids [OPTIONS]
+                                           repair pass: fetch the Message-ID header for
+                                           previously scanned messages and collapse
+                                           cross-source duplicate counts (idempotent;
+                                           re-run any time to continue an interrupted pass)
 
 OPTIONS:
     --db <PATH>            SQLite database path
@@ -91,8 +96,18 @@ fn chatty() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
-    Scan { resume: Option<i64> },
-    Import { path: PathBuf, resume: Option<i64> },
+    Scan {
+        resume: Option<i64>,
+    },
+    Import {
+        path: PathBuf,
+        resume: Option<i64>,
+    },
+    /// `scan --backfill-message-ids`: an ingest run that repairs historical
+    /// scan rows (fetch Message-ID headers, collapse cross-source duplicate
+    /// counts). Naturally resumable: re-running continues with whatever rows
+    /// are still unrepaired, so it takes no --resume run id.
+    BackfillMessageIds,
 }
 
 #[derive(Debug)]
@@ -120,6 +135,7 @@ fn parse_args(
     let mut quiet = false;
     let mut verbose = false;
     let mut resume = None;
+    let mut backfill = false;
     let mut positionals: Vec<String> = Vec::new();
 
     let mut it = args.into_iter();
@@ -145,6 +161,7 @@ fn parse_args(
                         .map_err(|_| format!("--resume expects a run id, got {v:?}"))?,
                 );
             }
+            "--backfill-message-ids" => backfill = true,
             "--quiet" => quiet = true,
             "--verbose" => verbose = true,
             "-h" | "--help" => return Ok(ParsedArgs::Help),
@@ -162,9 +179,21 @@ fn parse_args(
             if positionals.len() > 1 {
                 return Err(format!("unexpected argument {:?}", positionals[1]));
             }
-            Mode::Scan { resume }
+            if backfill {
+                if resume.is_some() {
+                    return Err("--backfill-message-ids takes no --resume: re-running it \
+                         automatically continues with the still-unrepaired rows"
+                        .to_string());
+                }
+                Mode::BackfillMessageIds
+            } else {
+                Mode::Scan { resume }
+            }
         }
         Some("import") => {
+            if backfill {
+                return Err("--backfill-message-ids only applies to scan".to_string());
+            }
             let path = positionals
                 .get(1)
                 .ok_or_else(|| "import requires the path to an mbox file".to_string())?;
@@ -290,6 +319,7 @@ async fn main() -> anyhow::Result<()> {
             report_import_summary(&summary, path);
             Ok(())
         }
+        Mode::BackfillMessageIds => run_backfill(&cfg, &options, writer_conn, cancel).await,
     }
 }
 
@@ -556,9 +586,12 @@ fn parse_and_send(
                 // RFC Message-IDs live in the `mid:` namespace of seen_mails so
                 // they can never collide with Gmail API ids, and re-imports
                 // stay idempotent. This namespacing is the permanent keyspace
-                // rule for cross-source dedupe (issue #26).
+                // rule for cross-source dedupe (issue #26); the normalized id
+                // additionally lands in rfc_message_id, where the writer's
+                // check-before-increment dedupes against scanned rows.
                 write_tx
                     .blocking_send(WriteMsg::Seen(SeenMail {
+                        rfc_message_id: ingest::normalize_rfc_message_id(&mid),
                         message_id: format!("mid:{mid}"),
                         sender,
                     }))
@@ -1284,7 +1317,11 @@ async fn parse_messages(ctx: &ScanCtx<'_>, messages: Vec<Message>) -> anyhow::Re
                 }
 
                 write_tx
-                    .send(WriteMsg::Seen(SeenMail { message_id, sender }))
+                    .send(WriteMsg::Seen(SeenMail {
+                        rfc_message_id: get_rfc_message_id(&message),
+                        message_id,
+                        sender,
+                    }))
                     .await
                     .map_err(|_| anyhow::anyhow!("DB writer task closed unexpectedly"))?;
 
@@ -1302,17 +1339,43 @@ async fn fetch_message(
     message_id: &str,
     rate_limiter: &Mutex<Interval>,
 ) -> anyhow::Result<Message> {
+    fetch_message_with(hub, message_id, rate_limiter, None).await
+}
+
+/// The backfill's variant of [`fetch_message`]: same rate limiting and retry
+/// treatment, but format=metadata restricted to the named headers — much
+/// cheaper than a full fetch when only Message-ID and From are needed.
+async fn fetch_message_metadata_headers(
+    hub: &GmailHub,
+    message_id: &str,
+    rate_limiter: &Mutex<Interval>,
+    headers: &[&str],
+) -> anyhow::Result<Message> {
+    fetch_message_with(hub, message_id, rate_limiter, Some(headers)).await
+}
+
+async fn fetch_message_with(
+    hub: &GmailHub,
+    message_id: &str,
+    rate_limiter: &Mutex<Interval>,
+    metadata_headers: Option<&[&str]>,
+) -> anyhow::Result<Message> {
     let mut attempts = 0;
     let mut backoff = Duration::from_secs(1);
     loop {
         rate_limiter.lock().await.tick().await;
 
-        let res = hub
+        let mut call = hub
             .users()
             .messages_get("me", message_id)
-            .add_scope(Scope::Readonly)
-            .doit()
-            .await;
+            .add_scope(Scope::Readonly);
+        if let Some(headers) = metadata_headers {
+            call = call.format("metadata");
+            for header in headers {
+                call = call.add_metadata_headers(header);
+            }
+        }
+        let res = call.doit().await;
 
         match res {
             Ok((_, message)) => return Ok(message),
@@ -1448,6 +1511,327 @@ fn classify_scan_error(err: &anyhow::Error) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
+// scan --backfill-message-ids: repair pass for historical scan rows
+// ---------------------------------------------------------------------------
+
+/// Headers requested by the backfill's metadata fetch: the Message-ID being
+/// backfilled, plus the sender headers so a collapsed duplicate knows whose
+/// count to decrement (same priority as the scan: From, then Return-Path).
+const BACKFILL_METADATA_HEADERS: &[&str] = &["Message-ID", "From", "Return-Path"];
+
+// Rows the backfill still has to repair are matched by the predicate
+// `rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%'`: API-scan rows (bare
+// Gmail ids, never `mid:`-prefixed) whose Message-ID is not known yet.
+// Repaired rows are non-NULL (a real id, or '' for "fetched, has none"), so
+// the same predicate makes re-runs and resumption automatic. It appears
+// inline in the two queries below (sqlx requires literal SQL).
+
+/// The repair pass behind `scan --backfill-message-ids` (issue #26 Phase D):
+/// a first-class ingest run — flock and stale-run cleanup happen in main()
+/// like every run, it writes an ingest_runs row with heartbeats, stops
+/// cleanly on SIGTERM/SIGINT, and is idempotent/resumable by construction.
+///
+/// It fetches format=metadata for every unrepaired scan row through the same
+/// rate-limited, retrying fetch machinery as the scan, records the normalized
+/// Message-ID, and collapses historical cross-source double counts (see
+/// ingest::backfill_writer for the per-row transaction).
+async fn run_backfill(
+    cfg: &Config,
+    options: &SqliteConnectOptions,
+    mut writer_conn: SqliteConnection,
+    cancel: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    let fetch_concurrency: usize =
+        env_or("GMAIL_STATS_FETCH_CONCURRENCY", DEFAULT_FETCH_CONCURRENCY)?;
+    anyhow::ensure!(
+        fetch_concurrency >= 1,
+        "GMAIL_STATS_FETCH_CONCURRENCY must be at least 1"
+    );
+    let rate_limit_ms: u64 = env_or("GMAIL_STATS_RATE_LIMIT_MS", DEFAULT_RATE_LIMIT_MS)?;
+    anyhow::ensure!(
+        rate_limit_ms >= 1,
+        "GMAIL_STATS_RATE_LIMIT_MS must be at least 1"
+    );
+
+    // Everything still to do; also the run's total for progress display. A
+    // fully repaired database finishes here without touching the network.
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(1) FROM seen_mails \
+         WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%'",
+    )
+    .fetch_one(&mut writer_conn)
+    .await?;
+    let run_id = ingest::create_run(&mut writer_conn, "backfill", None).await?;
+    // The writer task isn't spawned yet, so this connection is still the
+    // single writer; set the total directly.
+    sqlx::query("UPDATE ingest_runs SET total_estimate = ? WHERE run_id = ?")
+        .bind(pending)
+        .bind(run_id)
+        .execute(&mut writer_conn)
+        .await?;
+    if pending == 0 {
+        drop(writer_conn);
+        ingest::finish_run(options, run_id, "done", None, None).await?;
+        if chatty() {
+            println!(
+                "nothing to backfill: every scanned message already has its \
+                 Message-ID recorded"
+            );
+        }
+        return Ok(());
+    }
+    if chatty() {
+        println!("backfilling Message-IDs for {pending} scanned message(s) (run {run_id})");
+    }
+
+    // OAuth, exactly like the scan (same credential/token files). Consent is
+    // terminal-only here: the backfill is started from a shell, and a repaired
+    // token cache from the original scan normally makes this silent.
+    let secret = match yup_oauth2::read_application_secret(&cfg.credentials).await {
+        Ok(secret) => secret,
+        Err(e) => {
+            drop(writer_conn);
+            let msg = format!(
+                "reading OAuth client secret from {}: {e}",
+                cfg.credentials.display()
+            );
+            ingest::finish_run(
+                options,
+                run_id,
+                "failed",
+                Some("missing_credentials"),
+                Some(&msg),
+            )
+            .await
+            .ok();
+            return Err(anyhow::Error::new(e).context(format!(
+                "reading OAuth client secret from {} (the backfill uses the same \
+                 OAuth setup as the scan; see the README)",
+                cfg.credentials.display()
+            )));
+        }
+    };
+    let auth = match yup_oauth2::InstalledFlowAuthenticator::builder(
+        secret,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+    )
+    .persist_tokens_to_disk(cfg.tokens.clone())
+    .build()
+    .await
+    {
+        Ok(auth) => auth,
+        Err(e) => {
+            drop(writer_conn);
+            ingest::finish_run(
+                options,
+                run_id,
+                "failed",
+                Some("auth_required"),
+                Some(&e.to_string()),
+            )
+            .await
+            .ok();
+            return Err(anyhow::Error::new(e).context("building the OAuth authenticator"));
+        }
+    };
+    let auth_timeout = Duration::from_secs(env_or(
+        "GMAIL_STATS_AUTH_TIMEOUT",
+        DEFAULT_AUTH_TIMEOUT_SECS,
+    )?);
+    let scopes = ["https://www.googleapis.com/auth/gmail.readonly"];
+    if let Err(e) = consent_within(auth.token(&scopes), auth_timeout).await {
+        drop(writer_conn);
+        let msg = format!("{e:#}");
+        ingest::finish_run(
+            options,
+            run_id,
+            "failed",
+            Some(consent_error_kind(&msg)),
+            Some(&msg),
+        )
+        .await
+        .ok();
+        return Err(e);
+    }
+    let hub = Gmail::new(
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_native_roots()?
+                .https_or_http()
+                .enable_http2()
+                .build(),
+        ),
+        auth,
+    );
+
+    let mut read_conn = SqliteConnection::connect_with(options).await?;
+    let (write_tx, write_rx) = mpsc::channel::<ingest::BackfillMsg>(100);
+    let writer_handle = task::spawn(ingest::backfill_writer(writer_conn, write_rx, run_id));
+
+    let mut interval = tokio::time::interval(Duration::from_millis(rate_limit_ms));
+    interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let rate_limiter = Arc::new(Mutex::new(interval));
+    let hub_ref = &hub;
+    let rate_limiter_ref = &rate_limiter;
+    let fetch = move |mail_id: String| async move {
+        fetch_message_metadata_headers(
+            hub_ref,
+            &mail_id,
+            rate_limiter_ref,
+            BACKFILL_METADATA_HEADERS,
+        )
+        .await
+    };
+
+    let loop_result = backfill_scan_rows(
+        &mut read_conn,
+        &write_tx,
+        fetch_concurrency,
+        fetch,
+        cancel.as_ref(),
+    )
+    .await;
+
+    drop(write_tx);
+    let writer_result = match writer_handle.await {
+        Ok(result) => result,
+        Err(join_err) => {
+            let msg = format!("DB writer task panicked: {join_err:?}");
+            ingest::finish_run(options, run_id, "failed", Some("db"), Some(&msg))
+                .await
+                .ok();
+            anyhow::bail!("{msg}");
+        }
+    };
+
+    let outcome = match (loop_result, writer_result) {
+        (Ok(()), Ok(outcome)) => outcome,
+        (_, Err(writer_err)) => {
+            ingest::finish_run(
+                options,
+                run_id,
+                "failed",
+                Some("db"),
+                Some(&format!("{writer_err:#}")),
+            )
+            .await
+            .ok();
+            return Err(writer_err.context("DB writer task failed"));
+        }
+        (Err(e), Ok(outcome)) => {
+            if cancel.load(Ordering::Relaxed) {
+                // Shutdown fallout, not a real failure: everything committed
+                // so far is durable, and a re-run continues from it.
+                outcome
+            } else {
+                ingest::finish_run(
+                    options,
+                    run_id,
+                    "failed",
+                    Some(classify_scan_error(&e)),
+                    Some(&format!("{e:#}")),
+                )
+                .await
+                .ok();
+                return Err(e.context(
+                    "backfill stopped; re-run `gmail_stats scan --backfill-message-ids` \
+                     to continue where it left off",
+                ));
+            }
+        }
+    };
+
+    if cancel.load(Ordering::Relaxed) {
+        ingest::finish_run(options, run_id, "cancelled", None, None).await?;
+        println!(
+            "backfill cancelled cleanly; re-run `gmail_stats scan --backfill-message-ids` \
+             to continue where it left off"
+        );
+    } else {
+        ingest::finish_run(options, run_id, "done", None, None).await?;
+        println!(
+            "backfill finished: {} message(s) checked, {} Message-ID(s) recorded, \
+             {} without a Message-ID, {} cross-source duplicate count(s) collapsed",
+            outcome.examined, outcome.populated, outcome.missing_id, outcome.decremented
+        );
+    }
+    Ok(())
+}
+
+/// Iterate the unrepaired scan rows in keyset-paginated batches, fetch each
+/// message's metadata (bounded concurrency, shared rate limiter), and send
+/// the extracted Message-ID + sender to the backfill writer.
+///
+/// The cursor advances over mail_id, so rows dispatched but not yet committed
+/// by the writer are never selected twice within a run; across runs, repaired
+/// rows are non-NULL and drop out of the query entirely. Generic over the
+/// fetch function so the loop is testable with fabricated messages — the live
+/// path plugs in the scan's rate-limited/retrying metadata fetch.
+async fn backfill_scan_rows<F, Fut>(
+    read_conn: &mut SqliteConnection,
+    write_tx: &mpsc::Sender<ingest::BackfillMsg>,
+    fetch_concurrency: usize,
+    fetch: F,
+    cancel: &AtomicBool,
+) -> anyhow::Result<()>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Message>>,
+{
+    let mut dispatched = 0u64;
+    let mut cursor = String::new();
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let batch: Vec<String> = sqlx::query_scalar(
+            "SELECT mail_id FROM seen_mails \
+             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%' \
+             AND mail_id > ? ORDER BY mail_id LIMIT 500",
+        )
+        .bind(&cursor)
+        .fetch_all(&mut *read_conn)
+        .await?;
+        let Some(last) = batch.last() else {
+            return Ok(());
+        };
+        cursor = last.clone();
+        dispatched += batch.len() as u64;
+
+        let fetch_ref = &fetch;
+        stream::iter(batch.into_iter().map(Ok::<_, anyhow::Error>))
+            .try_for_each_concurrent(fetch_concurrency, move |mail_id| {
+                let write_tx = write_tx.clone();
+                async move {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    let message = fetch_ref(mail_id.clone())
+                        .await
+                        .with_context(|| format!("fetching metadata for message {mail_id}"))?;
+                    let sender = cleanup_sender(get_sender(&message)?);
+                    if verbose() {
+                        println!("backfill {mail_id}: sender {sender:?}");
+                    }
+                    write_tx
+                        .send(ingest::BackfillMsg {
+                            rfc_message_id: get_rfc_message_id(&message),
+                            mail_id,
+                            sender,
+                        })
+                        .await
+                        .map_err(|_| anyhow::anyhow!("DB writer task closed unexpectedly"))?;
+                    Ok(())
+                }
+            })
+            .await?;
+        if chatty() {
+            println!("backfill: {dispatched} message(s) fetched");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Sender extraction, shared by both ingestion modes
 // ---------------------------------------------------------------------------
 
@@ -1473,29 +1857,41 @@ fn cleanup_sender(sender: String) -> String {
     clean_sender
 }
 
-fn get_sender(message: &Message) -> anyhow::Result<String> {
-    // Header names are case-insensitive (RFC 5322); check candidates in
-    // priority order via the shared pick_sender.
-    let headers = message
+/// Find a header value by case-insensitive name (RFC 5322) in a fetched
+/// message's payload.
+fn find_header<'a>(message: &'a Message, name: &str) -> Option<&'a str> {
+    message
         .payload
         .as_ref()
         .and_then(|p| p.headers.as_deref())
-        .unwrap_or(&[]);
-    let find = |name: &str| {
-        headers.iter().find_map(|header| {
+        .unwrap_or(&[])
+        .iter()
+        .find_map(|header| {
             header
                 .name
                 .as_deref()
                 .filter(|n| n.eq_ignore_ascii_case(name))
                 .and(header.value.as_deref())
         })
-    };
+}
 
-    let sender = pick_sender(find("from"), find("return-path"));
+fn get_sender(message: &Message) -> anyhow::Result<String> {
+    // Check candidates in priority order via the shared pick_sender.
+    let sender = pick_sender(
+        find_header(message, "from"),
+        find_header(message, "return-path"),
+    );
     if sender.is_empty() && verbose() {
         println!("weird email without from header: {:?}", message.id);
     }
     Ok(sender)
+}
+
+/// The message's RFC Message-ID, normalized with the shared helper. Used by
+/// the scan when marking a message seen and by the backfill repair pass, so
+/// the same message always yields the same normalized id.
+fn get_rfc_message_id(message: &Message) -> Option<String> {
+    find_header(message, "message-id").and_then(ingest::normalize_rfc_message_id)
 }
 
 #[cfg(test)]
@@ -1685,6 +2081,35 @@ mod tests {
         assert_eq!(get_sender(&message).unwrap(), "bounce@example.com");
     }
 
+    // --- get_rfc_message_id ---
+
+    #[test]
+    fn get_rfc_message_id_normalizes_the_header() {
+        for (raw, want) in [
+            ("<m1@example.com>", Some("m1@example.com")),
+            ("m1@example.com", Some("m1@example.com")),
+            ("  <m1@example.com>  ", Some("m1@example.com")),
+            ("<>", None),
+        ] {
+            let message = message_with_headers(vec![header("Message-ID", Some(raw))]);
+            assert_eq!(
+                get_rfc_message_id(&message).as_deref(),
+                want,
+                "failed for {raw:?}"
+            );
+        }
+        // Case-insensitive header name, like every RFC 5322 header.
+        let message = message_with_headers(vec![header("MESSAGE-ID", Some("<m1@example.com>"))]);
+        assert_eq!(
+            get_rfc_message_id(&message).as_deref(),
+            Some("m1@example.com")
+        );
+        // Absent header (or no payload): None.
+        let message = message_with_headers(vec![header("Subject", Some("hi"))]);
+        assert_eq!(get_rfc_message_id(&message), None);
+        assert_eq!(get_rfc_message_id(&Message::default()), None);
+    }
+
     #[test]
     fn get_sender_falls_back_to_empty_string() {
         // Headers present but none relevant.
@@ -1777,6 +2202,22 @@ mod tests {
     }
 
     #[test]
+    fn backfill_flag_selects_the_repair_mode() {
+        assert_eq!(
+            run_cfg(&["scan", "--backfill-message-ids"], no_env).mode,
+            Mode::BackfillMessageIds
+        );
+        assert_eq!(
+            run_cfg(&["--backfill-message-ids"], no_env).mode,
+            Mode::BackfillMessageIds
+        );
+        assert_eq!(
+            run_cfg(&["--backfill-message-ids", "--quiet"], no_env).verbosity,
+            Verbosity::Quiet
+        );
+    }
+
+    #[test]
     fn invalid_invocations_are_rejected() {
         for args in [
             &["--quiet", "--verbose"][..],
@@ -1787,6 +2228,8 @@ mod tests {
             &["scan", "extra"][..],
             &["import", "a.mbox", "extra"][..],
             &["--db"][..],
+            &["scan", "--backfill-message-ids", "--resume", "3"][..],
+            &["import", "a.mbox", "--backfill-message-ids"][..],
         ] {
             let result = parse_args(args.iter().map(|s| s.to_string()), no_env);
             assert!(result.is_err(), "expected {args:?} to be rejected");
@@ -2142,6 +2585,135 @@ mod tests {
             consent_error_kind("Error 400: policy_enforced"),
             "policy_enforced"
         );
+    }
+
+    // --- backfill fetch loop (fabricated rows and messages; the live path
+    //     plugs the scan's rate-limited metadata fetch into the same loop) ---
+
+    /// A fake fetcher standing in for fetch_message_metadata_headers: returns
+    /// canned headers per Gmail id, exactly the shape format=metadata yields.
+    fn fabricated_fetcher(
+        mails: Vec<(&'static str, Option<&'static str>, &'static str)>,
+    ) -> impl Fn(String) -> std::future::Ready<anyhow::Result<Message>> {
+        move |mail_id: String| {
+            let found = mails.iter().find(|(id, _, _)| *id == mail_id);
+            std::future::ready(match found {
+                None => Err(anyhow::anyhow!("unexpected fetch for {mail_id}")),
+                Some((_, rfc, from)) => {
+                    let mut headers = vec![header("From", Some(from))];
+                    if let Some(rfc) = rfc {
+                        headers.push(header("Message-ID", Some(rfc)));
+                    }
+                    Ok(message_with_headers(headers))
+                }
+            })
+        }
+    }
+
+    /// End-to-end over fabricated rows: the loop selects exactly the bare
+    /// Gmail rows with NULL rfc_message_id (mid: rows and repaired rows are
+    /// untouched), fetches them, and the writer populates and collapses. A
+    /// second pass finds nothing to fetch.
+    #[tokio::test]
+    async fn backfill_loop_repairs_only_pending_scan_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+        // Historical mixed DB: g1 double-counted with the mid: row, g2 scan
+        // only, g3 has no Message-ID, g4 already repaired, plus a mid: row.
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', NULL), ('g2', NULL), ('g3', NULL), \
+             ('g4', 'm4@example.com'), \
+             ('mid:<m1@example.com>', 'm1@example.com')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO senders (sender, mails_sent) VALUES \
+             ('a@example.com', 3), ('b@example.com', 2)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        let run_id = ingest::create_run(&mut conn, "backfill", None)
+            .await
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel(16);
+        let writer = task::spawn(ingest::backfill_writer(conn, rx, run_id));
+        let fetch = fabricated_fetcher(vec![
+            ("g1", Some("<m1@example.com>"), "Alice <a@example.com>"),
+            ("g2", Some("<m2@example.com>"), "Bob <b@example.com>"),
+            ("g3", None, "Alice <a@example.com>"),
+        ]);
+        let mut read_conn = SqliteConnection::connect_with(&options).await.unwrap();
+        backfill_scan_rows(&mut read_conn, &tx, 4, &fetch, &AtomicBool::new(false))
+            .await
+            .unwrap();
+        drop(tx);
+        let outcome = writer.await.unwrap().unwrap();
+        assert_eq!(outcome.examined, 3);
+        assert_eq!(outcome.populated, 2);
+        assert_eq!(outcome.missing_id, 1);
+        assert_eq!(outcome.decremented, 1, "only g1 pairs with the mid: row");
+
+        // Counts collapsed exactly once; the untouched rows kept theirs.
+        assert_eq!(sender_count(&options, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&options, "b@example.com").await, Some(2));
+
+        // Second pass: nothing left to fetch — the fetcher would error on any
+        // call, so an empty run proves idempotency.
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let run_id = ingest::create_run(&mut conn, "backfill", None)
+            .await
+            .unwrap();
+        let (tx, rx) = mpsc::channel(16);
+        let writer = task::spawn(ingest::backfill_writer(conn, rx, run_id));
+        let failing = fabricated_fetcher(vec![]);
+        backfill_scan_rows(&mut read_conn, &tx, 4, &failing, &AtomicBool::new(false))
+            .await
+            .unwrap();
+        drop(tx);
+        let outcome = writer.await.unwrap().unwrap();
+        assert_eq!(outcome.examined, 0, "a repaired database is a no-op");
+    }
+
+    /// Cancellation stops the loop between batches without error; whatever
+    /// was committed stays repaired for the next run.
+    #[tokio::test]
+    async fn backfill_loop_stops_on_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+        sqlx::query("INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES ('g1', NULL)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        let run_id = ingest::create_run(&mut conn, "backfill", None)
+            .await
+            .unwrap();
+        let (tx, rx) = mpsc::channel(16);
+        let writer = task::spawn(ingest::backfill_writer(conn, rx, run_id));
+        let fetch = fabricated_fetcher(vec![]);
+        let mut read_conn = SqliteConnection::connect_with(&options).await.unwrap();
+        backfill_scan_rows(&mut read_conn, &tx, 4, &fetch, &AtomicBool::new(true))
+            .await
+            .unwrap();
+        drop(tx);
+        let outcome = writer.await.unwrap().unwrap();
+        assert_eq!(outcome.examined, 0);
+        // The row is still pending for the next run.
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(1) FROM seen_mails \
+             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(pending, 1);
     }
 
     #[tokio::test]

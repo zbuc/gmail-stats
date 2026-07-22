@@ -14,8 +14,10 @@ use tokio::time::MissedTickBehavior;
 
 /// The schema version this binary knows how to produce, tracked in
 /// `PRAGMA user_version`. The pre-versioning tables (`seen_mails`, `senders`)
-/// are the version-0 baseline; migration 1 adds `ingest_runs`.
-pub const SCHEMA_VERSION: i64 = 1;
+/// are the version-0 baseline; migration 1 adds `ingest_runs`; migration 2
+/// adds `seen_mails.rfc_message_id` for cross-source dedupe (issue #26
+/// Phase D).
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub fn now_unix() -> i64 {
     SystemTime::now()
@@ -99,7 +101,79 @@ pub async fn migrate(conn: &mut SqliteConnection) -> anyhow::Result<()> {
         tx.commit().await?;
     }
 
+    if version < 2 {
+        // Migration 2: the rfc_message_id column that unifies the two
+        // seen_mails keyspaces (bare Gmail ids from API scans, `mid:`-prefixed
+        // RFC Message-IDs from mbox imports). Nullable — NULL means "not
+        // known yet" for scan rows (repaired by `scan --backfill-message-ids`)
+        // and stays NULL forever for messages that genuinely have no
+        // Message-ID. Non-unique index: duplicate Message-IDs are data, the
+        // dedupe check just needs the lookup to be cheap.
+        //
+        // `mid:` rows embed their Message-ID in the key itself, so they are
+        // populated right here with the same normalization the ingesters use;
+        // only bare Gmail rows need the API backfill afterwards.
+        let mut tx = conn.begin().await?;
+        sqlx::query("ALTER TABLE seen_mails ADD COLUMN rfc_message_id TEXT")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS seen_mails_rfc_message_id \
+             ON seen_mails (rfc_message_id)",
+        )
+        .execute(&mut *tx)
+        .await?;
+        loop {
+            let batch: Vec<String> = sqlx::query_scalar(
+                "SELECT mail_id FROM seen_mails \
+                 WHERE mail_id LIKE 'mid:%' AND rfc_message_id IS NULL LIMIT 10000",
+            )
+            .fetch_all(&mut *tx)
+            .await?;
+            if batch.is_empty() {
+                break;
+            }
+            for mail_id in batch {
+                let normalized = normalize_rfc_message_id(&mail_id["mid:".len()..]);
+                // A mid: key whose embedded id normalizes to nothing would be
+                // unreachable by the dedupe check either way; the empty-string
+                // marker below just keeps this loop from revisiting the row.
+                sqlx::query("UPDATE seen_mails SET rfc_message_id = ? WHERE mail_id = ?")
+                    .bind(normalized.unwrap_or_default())
+                    .bind(&mail_id)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+        sqlx::query("PRAGMA user_version = 2")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+
     Ok(())
+}
+
+/// Normalize an RFC 5322 Message-ID for cross-source comparison: trim
+/// whitespace, strip one pair of enclosing angle brackets, trim again.
+/// Case is preserved (the left-hand side of a Message-ID is case-sensitive).
+/// Returns None when nothing usable remains — such messages are never deduped
+/// across sources.
+///
+/// This is the single shared normalization used by the API scanner, the mbox
+/// importer, the migration that populates `mid:` rows, and the backfill.
+pub fn normalize_rfc_message_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let inner = trimmed
+        .strip_prefix('<')
+        .and_then(|s| s.strip_suffix('>'))
+        .unwrap_or(trimmed)
+        .trim();
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner.to_string())
+    }
 }
 
 /// Where the ingest lockfile for a given database lives: right next to it.
@@ -232,6 +306,10 @@ pub async fn finish_run(
 pub struct SeenMail {
     pub message_id: String,
     pub sender: String,
+    /// The message's RFC 5322 Message-ID, already normalized via
+    /// [`normalize_rfc_message_id`]. None when the message has none — such
+    /// messages keep the pre-Phase-D behavior (counted, NULL column).
+    pub rfc_message_id: Option<String>,
 }
 
 /// Everything that flows over the writer channel; all durable writes ride
@@ -266,7 +344,11 @@ pub enum WriteMsg {
 /// The insert-and-count pair is idempotent per message id: the sender counter
 /// (and the run's messages_new) is only incremented when the INSERT OR IGNORE
 /// actually inserts the row, so a message that slips through a read-side seen
-/// check twice is still counted exactly once. Between messages the writer
+/// check twice is still counted exactly once. Cross-source dedupe happens in
+/// the same transaction: a newly inserted row whose normalized Message-ID
+/// already exists on any other seen_mails row (the other keyspace having
+/// ingested the same message) is recorded as seen but not counted — neither
+/// the sender nor the run's messages_new moves. Between messages the writer
 /// heartbeats the run row (~2s) so watchers can distinguish "slow" from
 /// "stalled".
 pub async fn db_writer(
@@ -282,17 +364,25 @@ pub async fn db_writer(
                 None => break,
                 Some(WriteMsg::Seen(mail)) => {
                     let mut tx = conn.begin().await?;
-                    let newly_seen = mark_seen(&mail.message_id, &mut *tx).await?;
+                    let newly_seen = mark_seen(&mail, &mut *tx).await?;
                     if newly_seen {
-                        increment_sender_mails(&mail.sender, &mut tx).await?;
-                        sqlx::query(
-                            "UPDATE ingest_runs SET messages_new = messages_new + 1, \
-                             updated_at_unix = ? WHERE run_id = ?",
-                        )
-                        .bind(now_unix())
-                        .bind(run_id)
-                        .execute(&mut *tx)
-                        .await?;
+                        let cross_source_dup = match mail.rfc_message_id.as_deref() {
+                            Some(rfc_id) => {
+                                rfc_id_exists_elsewhere(rfc_id, &mail.message_id, &mut *tx).await?
+                            }
+                            None => false,
+                        };
+                        if !cross_source_dup {
+                            increment_sender_mails(&mail.sender, &mut tx).await?;
+                            sqlx::query(
+                                "UPDATE ingest_runs SET messages_new = messages_new + 1, \
+                                 updated_at_unix = ? WHERE run_id = ?",
+                            )
+                            .bind(now_unix())
+                            .bind(run_id)
+                            .execute(&mut *tx)
+                            .await?;
+                        }
                     }
                     tx.commit().await?;
                 }
@@ -354,14 +444,36 @@ pub async fn seen_mail(
     Ok(false)
 }
 
-/// Record a message id as seen. Returns whether the id was newly inserted;
-/// false means it was already present and must not be counted again.
-async fn mark_seen(message_id: &str, executor: impl SqliteExecutor<'_>) -> anyhow::Result<bool> {
-    let result = sqlx::query("INSERT OR IGNORE INTO seen_mails (mail_id) VALUES (?)")
-        .bind(message_id)
-        .execute(executor)
-        .await?;
+/// Record a message id as seen (with its normalized Message-ID when known).
+/// Returns whether the id was newly inserted; false means it was already
+/// present and must not be counted again.
+async fn mark_seen(mail: &SeenMail, executor: impl SqliteExecutor<'_>) -> anyhow::Result<bool> {
+    let result =
+        sqlx::query("INSERT OR IGNORE INTO seen_mails (mail_id, rfc_message_id) VALUES (?, ?)")
+            .bind(&mail.message_id)
+            .bind(&mail.rfc_message_id)
+            .execute(executor)
+            .await?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Whether a normalized Message-ID is already recorded on any seen_mails row
+/// other than `own_mail_id`. This is the cross-source duplicate check, run in
+/// both directions: a scan finding an mbox-imported message and an import
+/// finding a scanned one both land here.
+async fn rfc_id_exists_elsewhere(
+    rfc_id: &str,
+    own_mail_id: &str,
+    executor: impl SqliteExecutor<'_>,
+) -> anyhow::Result<bool> {
+    let exists: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM seen_mails WHERE rfc_message_id = ? AND mail_id <> ?)",
+    )
+    .bind(rfc_id)
+    .bind(own_mail_id)
+    .fetch_one(executor)
+    .await?;
+    Ok(exists != 0)
 }
 
 async fn increment_sender_mails(
@@ -399,6 +511,157 @@ async fn increment_sender_mails(
         .execute(&mut **tx)
         .await?;
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `scan --backfill-message-ids`: populate rfc_message_id on historical API
+// scan rows and collapse the cross-source double counts that accumulated
+// while sources were mixed without it.
+// ---------------------------------------------------------------------------
+
+/// One backfilled scan row, produced by the metadata fetch loop and sent to
+/// the single backfill writer task.
+pub struct BackfillMsg {
+    /// The bare Gmail id of the seen_mails row being repaired.
+    pub mail_id: String,
+    /// The fetched message's Message-ID, already normalized via
+    /// [`normalize_rfc_message_id`]; None when the message has none.
+    pub rfc_message_id: Option<String>,
+    /// The sender extracted from the fetched message, cleaned exactly like
+    /// the scan does — this is whose count is decremented when the row turns
+    /// out to be a cross-source duplicate.
+    pub sender: String,
+}
+
+/// What the backfill writer did, for the run summary.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct BackfillOutcome {
+    /// Rows received from the fetch loop.
+    pub examined: u64,
+    /// Rows whose rfc_message_id was populated with a real Message-ID.
+    pub populated: u64,
+    /// Rows fetched but found to have no Message-ID header; marked with the
+    /// empty-string sentinel so a re-run does not fetch them again.
+    pub missing_id: u64,
+    /// Duplicate pairs collapsed: sender counts decremented once each.
+    pub decremented: u64,
+    /// Rows that were already repaired when their result arrived (replays);
+    /// always 0 in a single clean run.
+    pub already_done: u64,
+}
+
+/// The single DB writer for a backfill run: applies each fetched row in its
+/// own transaction and heartbeats the run row like [`db_writer`]. Returns a
+/// summary of what it changed.
+///
+/// Per-row logic (the collapse fused with the populate, so partial completion
+/// plus a re-run is always exact):
+/// - a row that is no longer NULL is skipped — populate-and-decrement already
+///   happened, replaying the message is a no-op;
+/// - otherwise the fetched Message-ID (or the '' sentinel for "fetched, has
+///   none") is stored, and if the normalized id already exists on any *other*
+///   row — the mbox side of a historical double count, or an earlier repaired
+///   scan row with the same Message-ID — the sender's count is decremented
+///   once, never below zero.
+///
+/// Because the decision is committed atomically with the populate, a run
+/// killed anywhere leaves every row either fully repaired (populated and, if
+/// it was a duplicate, decremented) or untouched (still NULL, picked up by
+/// the next run). A second run over a repaired database finds no NULL rows
+/// and does nothing.
+pub async fn backfill_writer(
+    mut conn: SqliteConnection,
+    mut rx: mpsc::Receiver<BackfillMsg>,
+    run_id: i64,
+) -> anyhow::Result<BackfillOutcome> {
+    let mut outcome = BackfillOutcome::default();
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(2));
+    heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                None => break,
+                Some(msg) => {
+                    let mut tx = conn.begin().await?;
+                    apply_backfill(&mut tx, &msg, &mut outcome).await?;
+                    sqlx::query(
+                        "UPDATE ingest_runs SET messages_seen = ?, messages_new = ?, \
+                         updated_at_unix = ? WHERE run_id = ?",
+                    )
+                    .bind(outcome.examined as i64)
+                    .bind((outcome.populated + outcome.missing_id) as i64)
+                    .bind(now_unix())
+                    .bind(run_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    tx.commit().await?;
+                }
+            },
+            _ = heartbeat.tick() => {
+                sqlx::query("UPDATE ingest_runs SET updated_at_unix = ? WHERE run_id = ?")
+                    .bind(now_unix())
+                    .bind(run_id)
+                    .execute(&mut conn)
+                    .await?;
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+async fn apply_backfill(
+    tx: &mut Transaction<'_, Sqlite>,
+    msg: &BackfillMsg,
+    outcome: &mut BackfillOutcome,
+) -> anyhow::Result<()> {
+    outcome.examined += 1;
+    let still_null: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM seen_mails \
+         WHERE mail_id = ? AND rfc_message_id IS NULL)",
+    )
+    .bind(&msg.mail_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if still_null == 0 {
+        outcome.already_done += 1;
+        return Ok(());
+    }
+    match msg.rfc_message_id.as_deref() {
+        None => {
+            // '' sentinel: fetched, genuinely has no Message-ID. Never
+            // matched by the dedupe check (which only binds non-empty
+            // normalized ids), but no longer NULL, so re-runs skip it.
+            sqlx::query("UPDATE seen_mails SET rfc_message_id = '' WHERE mail_id = ?")
+                .bind(&msg.mail_id)
+                .execute(&mut **tx)
+                .await?;
+            outcome.missing_id += 1;
+        }
+        Some(rfc_id) => {
+            let duplicate = rfc_id_exists_elsewhere(rfc_id, &msg.mail_id, &mut **tx).await?;
+            sqlx::query("UPDATE seen_mails SET rfc_message_id = ? WHERE mail_id = ?")
+                .bind(rfc_id)
+                .bind(&msg.mail_id)
+                .execute(&mut **tx)
+                .await?;
+            outcome.populated += 1;
+            if duplicate {
+                // This message was counted once by the scan (this row) and
+                // once by the other row's ingester: collapse exactly one of
+                // the two, clamped at zero in case the counts were already
+                // edited out from under us.
+                sqlx::query(
+                    "UPDATE senders SET mails_sent = mails_sent - 1 \
+                     WHERE sender = ? AND mails_sent > 0",
+                )
+                .bind(&msg.sender)
+                .execute(&mut **tx)
+                .await?;
+                outcome.decremented += 1;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -489,6 +752,26 @@ mod tests {
             .unwrap()
     }
 
+    async fn index_exists(conn: &mut SqliteConnection, name: &str) -> bool {
+        let count: i64 =
+            sqlx::query("SELECT count(1) AS ct FROM sqlite_master WHERE type='index' AND name=?")
+                .bind(name)
+                .fetch_one(conn)
+                .await
+                .unwrap()
+                .try_get("ct")
+                .unwrap();
+        count > 0
+    }
+
+    async fn rfc_of(conn: &mut SqliteConnection, mail_id: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT rfc_message_id FROM seen_mails WHERE mail_id = ?")
+            .bind(mail_id)
+            .fetch_one(conn)
+            .await
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn migrate_initializes_a_fresh_database() {
         let mut conn = memory_conn().await;
@@ -496,7 +779,13 @@ mod tests {
         assert!(table_exists(&mut conn, "seen_mails").await);
         assert!(table_exists(&mut conn, "senders").await);
         assert!(table_exists(&mut conn, "ingest_runs").await);
+        assert!(index_exists(&mut conn, "seen_mails_rfc_message_id").await);
         assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+        // The column is usable on a fresh database.
+        sqlx::query("INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES ('g1', 'a@b')")
+            .execute(&mut conn)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -524,9 +813,11 @@ mod tests {
 
         migrate(&mut conn).await.unwrap();
 
-        assert_eq!(user_version(&mut conn).await, 1);
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
         assert!(table_exists(&mut conn, "ingest_runs").await);
-        // Existing data survives; pre-index duplicates are collapsed.
+        assert!(index_exists(&mut conn, "seen_mails_rfc_message_id").await);
+        // Existing data survives; pre-index duplicates are collapsed; the
+        // new column defaults to NULL ("Message-ID not known yet").
         let seen: i64 = sqlx::query("SELECT count(1) AS ct FROM seen_mails")
             .fetch_one(&mut conn)
             .await
@@ -534,6 +825,7 @@ mod tests {
             .try_get("ct")
             .unwrap();
         assert_eq!(seen, 2);
+        assert_eq!(rfc_of(&mut conn, "m1").await, None);
         let mails: i64 = sqlx::query("SELECT mails_sent FROM senders WHERE sender='a@example.com'")
             .fetch_one(&mut conn)
             .await
@@ -544,7 +836,100 @@ mod tests {
 
         // Running again is a no-op.
         migrate(&mut conn).await.unwrap();
-        assert_eq!(user_version(&mut conn).await, 1);
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+    }
+
+    /// A version-1 database (Phases A-C): migration 2 adds the column and
+    /// index, and populates `mid:` rows from the Message-ID embedded in their
+    /// key — only bare Gmail rows are left NULL for the API backfill.
+    #[tokio::test]
+    async fn migrate_upgrades_a_version_1_database_and_populates_mid_rows() {
+        let mut conn = memory_conn().await;
+        migrate(&mut conn).await.unwrap();
+        // Rewind to version 1: drop the Phase-D column by rebuilding the
+        // table the way a v1 binary left it.
+        sqlx::query("DROP TABLE seen_mails")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE seen_mails (mail_id string)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX seen_mails_mail_id_unique ON seen_mails (mail_id)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id) VALUES \
+             ('gmailid1'), ('mid:<m1@example.com>'), ('mid: <m2@example.com> '), ('mid:')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA user_version = 1")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        migrate(&mut conn).await.unwrap();
+
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+        assert!(index_exists(&mut conn, "seen_mails_rfc_message_id").await);
+        // Scan rows stay NULL (repaired later by the backfill)...
+        assert_eq!(rfc_of(&mut conn, "gmailid1").await, None);
+        // ...mid: rows are populated with the shared normalization...
+        assert_eq!(
+            rfc_of(&mut conn, "mid:<m1@example.com>").await.as_deref(),
+            Some("m1@example.com")
+        );
+        assert_eq!(
+            rfc_of(&mut conn, "mid: <m2@example.com> ").await.as_deref(),
+            Some("m2@example.com")
+        );
+        // ...and a degenerate empty embedded id gets the '' marker, not NULL.
+        assert_eq!(rfc_of(&mut conn, "mid:").await.as_deref(), Some(""));
+
+        // Running again is a no-op.
+        migrate(&mut conn).await.unwrap();
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn normalize_rfc_message_id_variants() {
+        for raw in [
+            "<id@host>",
+            "id@host",
+            "  <id@host>  ",
+            "\t<id@host>\r\n",
+            "< id@host >",
+            "  id@host  ",
+        ] {
+            assert_eq!(
+                normalize_rfc_message_id(raw).as_deref(),
+                Some("id@host"),
+                "failed for {raw:?}"
+            );
+        }
+        // Case is preserved.
+        assert_eq!(
+            normalize_rfc_message_id("<ID@Host>").as_deref(),
+            Some("ID@Host")
+        );
+        // Only one enclosing pair is stripped, and unbalanced brackets stay.
+        assert_eq!(
+            normalize_rfc_message_id("<<id@host>>").as_deref(),
+            Some("<id@host>")
+        );
+        assert_eq!(
+            normalize_rfc_message_id("<id@host").as_deref(),
+            Some("<id@host")
+        );
+        // Nothing usable.
+        assert_eq!(normalize_rfc_message_id(""), None);
+        assert_eq!(normalize_rfc_message_id("   "), None);
+        assert_eq!(normalize_rfc_message_id("<>"), None);
+        assert_eq!(normalize_rfc_message_id(" < > "), None);
     }
 
     #[tokio::test]
@@ -638,6 +1023,7 @@ mod tests {
             tx.send(WriteMsg::Seen(SeenMail {
                 message_id: "mid:<m1@example.com>".into(),
                 sender: "a@example.com".into(),
+                rfc_message_id: Some("m1@example.com".into()),
             }))
             .await
             .unwrap();
@@ -645,6 +1031,7 @@ mod tests {
         tx.send(WriteMsg::Seen(SeenMail {
             message_id: "mid:<m2@example.com>".into(),
             sender: "a@example.com".into(),
+            rfc_message_id: Some("m2@example.com".into()),
         }))
         .await
         .unwrap();
@@ -712,6 +1099,367 @@ mod tests {
             .unwrap();
         assert_eq!(row.try_get::<String, _>("state").unwrap(), "running");
         assert_eq!(row.try_get::<Option<String>, _>("auth_url").unwrap(), None);
+    }
+
+    // --- cross-source dedupe (Phase D) -------------------------------------
+
+    async fn sender_count(conn: &mut SqliteConnection, sender: &str) -> Option<i64> {
+        sqlx::query_scalar("SELECT mails_sent FROM senders WHERE sender = ?")
+            .bind(sender)
+            .fetch_optional(conn)
+            .await
+            .unwrap()
+    }
+
+    async fn seen_count(conn: &mut SqliteConnection) -> i64 {
+        sqlx::query_scalar("SELECT count(1) FROM seen_mails")
+            .fetch_one(conn)
+            .await
+            .unwrap()
+    }
+
+    fn seen(message_id: &str, sender: &str, rfc: Option<&str>) -> WriteMsg {
+        WriteMsg::Seen(SeenMail {
+            message_id: message_id.into(),
+            sender: sender.into(),
+            rfc_message_id: rfc.map(str::to_string),
+        })
+    }
+
+    /// Run one batch of writer messages as its own ingest run (fresh writer
+    /// task, like a separate scan/import invocation) and return messages_new.
+    async fn run_writer_batch(
+        options: &SqliteConnectOptions,
+        source: &str,
+        msgs: Vec<WriteMsg>,
+    ) -> i64 {
+        let mut conn = SqliteConnection::connect_with(options).await.unwrap();
+        let run_id = create_run(&mut conn, source, None).await.unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let writer = tokio::spawn(db_writer(conn, rx, run_id));
+        for msg in msgs {
+            tx.send(msg).await.unwrap();
+        }
+        drop(tx);
+        writer.await.unwrap().unwrap();
+        let mut conn = SqliteConnection::connect_with(options).await.unwrap();
+        sqlx::query_scalar("SELECT messages_new FROM ingest_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap()
+    }
+
+    /// Scan first, then import an overlapping mailbox: the shared message is
+    /// marked seen by both keyspaces but counted once — sender totals equal
+    /// the true union. Messages without a Message-ID keep current behavior.
+    #[tokio::test]
+    async fn forward_dedupe_scan_then_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        drop(conn);
+
+        // Scan: two messages from Alice (one with no Message-ID), one from Bob.
+        let new = run_writer_batch(
+            &options,
+            "gmail_api",
+            vec![
+                seen("g1", "a@example.com", Some("m1@example.com")),
+                seen("g2", "a@example.com", None),
+                seen("g3", "b@example.com", Some("m3@example.com")),
+            ],
+        )
+        .await;
+        assert_eq!(new, 3);
+
+        // Import: overlaps on m1 (dup, not counted) and adds m4 (counted).
+        // The importer never emits Seen for id-less messages, so no None here.
+        let new = run_writer_batch(
+            &options,
+            "mbox",
+            vec![
+                seen(
+                    "mid:<m1@example.com>",
+                    "a@example.com",
+                    Some("m1@example.com"),
+                ),
+                seen(
+                    "mid:<m4@example.com>",
+                    "c@example.com",
+                    Some("m4@example.com"),
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(new, 1, "the overlapping message must be seen-not-new");
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(1));
+        assert_eq!(sender_count(&mut conn, "c@example.com").await, Some(1));
+        // Idempotency intact: the duplicate's seen row exists in both keyspaces.
+        assert_eq!(seen_count(&mut conn).await, 5);
+
+        // Replaying the import adds nothing.
+        let new = run_writer_batch(
+            &options,
+            "mbox",
+            vec![seen(
+                "mid:<m1@example.com>",
+                "a@example.com",
+                Some("m1@example.com"),
+            )],
+        )
+        .await;
+        assert_eq!(new, 0);
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+    }
+
+    /// The other direction: import first, then scan the same mailbox.
+    #[tokio::test]
+    async fn forward_dedupe_import_then_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        drop(conn);
+
+        let new = run_writer_batch(
+            &options,
+            "mbox",
+            vec![
+                seen(
+                    "mid:<m1@example.com>",
+                    "a@example.com",
+                    Some("m1@example.com"),
+                ),
+                seen(
+                    "mid:<m2@example.com>",
+                    "b@example.com",
+                    Some("m2@example.com"),
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(new, 2);
+
+        // Scan sees the same two messages plus one new id-less one.
+        let new = run_writer_batch(
+            &options,
+            "gmail_api",
+            vec![
+                seen("g1", "a@example.com", Some("m1@example.com")),
+                seen("g2", "b@example.com", Some("m2@example.com")),
+                seen("g3", "b@example.com", None),
+            ],
+        )
+        .await;
+        assert_eq!(new, 1, "only the id-less message is new");
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(1));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(2));
+        assert_eq!(seen_count(&mut conn).await, 5);
+    }
+
+    /// Fixture for backfill tests: a database that historically mixed sources
+    /// without rfc_message_id. Scan rows g1/g2 (NULL rfc) and mbox rows for
+    /// m1/m2, with senders double-counted accordingly.
+    async fn double_counted_fixture(options: &SqliteConnectOptions) {
+        let mut conn = SqliteConnection::connect_with(options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', NULL), \
+             ('g2', NULL), \
+             ('g3', NULL), \
+             ('mid:<m1@example.com>', 'm1@example.com'), \
+             ('mid:<m2@example.com>', 'm2@example.com')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        // Alice sent m1 (counted by scan AND import = 2) plus the id-less g3
+        // (counted once): recorded 3, true count 2. Bob sent m2 (counted
+        // twice): recorded 2, true count 1.
+        sqlx::query(
+            "INSERT INTO senders (sender, mails_sent) VALUES \
+             ('a@example.com', 3), ('b@example.com', 2)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    }
+
+    fn backfill(mail_id: &str, rfc: Option<&str>, sender: &str) -> BackfillMsg {
+        BackfillMsg {
+            mail_id: mail_id.into(),
+            rfc_message_id: rfc.map(str::to_string),
+            sender: sender.into(),
+        }
+    }
+
+    async fn run_backfill_batch(
+        options: &SqliteConnectOptions,
+        msgs: Vec<BackfillMsg>,
+    ) -> BackfillOutcome {
+        let mut conn = SqliteConnection::connect_with(options).await.unwrap();
+        let run_id = create_run(&mut conn, "backfill", None).await.unwrap();
+        let (tx, rx) = mpsc::channel(64);
+        let writer = tokio::spawn(backfill_writer(conn, rx, run_id));
+        for msg in msgs {
+            tx.send(msg).await.unwrap();
+        }
+        drop(tx);
+        writer.await.unwrap().unwrap()
+    }
+
+    /// The repair pass: populates scan rows, collapses each historical
+    /// double count exactly once, marks id-less rows with the '' sentinel,
+    /// and a second run finds nothing to do.
+    #[tokio::test]
+    async fn backfill_collapses_historical_double_counts_exactly_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        double_counted_fixture(&options).await;
+
+        let outcome = run_backfill_batch(
+            &options,
+            vec![
+                backfill("g1", Some("m1@example.com"), "a@example.com"),
+                backfill("g2", Some("m2@example.com"), "b@example.com"),
+                backfill("g3", None, "a@example.com"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            BackfillOutcome {
+                examined: 3,
+                populated: 2,
+                missing_id: 1,
+                decremented: 2,
+                already_done: 0,
+            }
+        );
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(1));
+        assert_eq!(
+            rfc_of(&mut conn, "g1").await.as_deref(),
+            Some("m1@example.com")
+        );
+        assert_eq!(
+            rfc_of(&mut conn, "g2").await.as_deref(),
+            Some("m2@example.com")
+        );
+        assert_eq!(rfc_of(&mut conn, "g3").await.as_deref(), Some(""));
+        // Nothing is left for a second run to fetch.
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(1) FROM seen_mails \
+             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(pending, 0);
+
+        // Replaying the very same results (a crashed run's retry) is a no-op:
+        // every row is already repaired, no count moves again.
+        let outcome = run_backfill_batch(
+            &options,
+            vec![
+                backfill("g1", Some("m1@example.com"), "a@example.com"),
+                backfill("g2", Some("m2@example.com"), "b@example.com"),
+                backfill("g3", None, "a@example.com"),
+            ],
+        )
+        .await;
+        assert_eq!(outcome.already_done, 3);
+        assert_eq!(outcome.decremented, 0);
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(1));
+    }
+
+    /// A run that dies mid-collapse leaves every processed row fully repaired
+    /// and every unprocessed row untouched; the resumed run repairs exactly
+    /// the remainder.
+    #[tokio::test]
+    async fn backfill_interrupted_midway_resumes_exactly() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        double_counted_fixture(&options).await;
+
+        // First run only got through g1 before dying.
+        let outcome = run_backfill_batch(
+            &options,
+            vec![backfill("g1", Some("m1@example.com"), "a@example.com")],
+        )
+        .await;
+        assert_eq!(outcome.decremented, 1);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(2));
+        assert_eq!(rfc_of(&mut conn, "g2").await, None);
+
+        // The next run's NULL-row query finds exactly the remainder.
+        let pending: Vec<String> = sqlx::query_scalar(
+            "SELECT mail_id FROM seen_mails \
+             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%' ORDER BY mail_id",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(pending, vec!["g2".to_string(), "g3".to_string()]);
+
+        let outcome = run_backfill_batch(
+            &options,
+            vec![
+                backfill("g2", Some("m2@example.com"), "b@example.com"),
+                backfill("g3", None, "a@example.com"),
+            ],
+        )
+        .await;
+        assert_eq!(outcome.decremented, 1);
+        assert_eq!(sender_count(&mut conn, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(1));
+    }
+
+    /// The decrement clamps at zero even when counts were edited externally.
+    #[tokio::test]
+    async fn backfill_never_decrements_below_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', NULL), ('mid:<m1@example.com>', 'm1@example.com')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES ('a@example.com', 0)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        drop(conn);
+
+        let outcome = run_backfill_batch(
+            &options,
+            vec![backfill("g1", Some("m1@example.com"), "a@example.com")],
+        )
+        .await;
+        assert_eq!(outcome.decremented, 1);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(
+            sender_count(&mut conn, "a@example.com").await,
+            Some(0),
+            "count must never go below zero"
+        );
     }
 
     #[test]
