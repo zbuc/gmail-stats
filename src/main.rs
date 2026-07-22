@@ -61,8 +61,8 @@ async fn main() -> anyhow::Result<()> {
 
     // The writer task owns the only connection that ever writes.
     let writer_conn = SqliteConnection::connect_with(&options).await?;
-    let (write_tx, write_rx) = mpsc::channel::<SeenMail>(100);
-    let writer_handle = task::spawn(db_writer(writer_conn, write_rx));
+    let (mut write_tx, write_rx) = mpsc::channel::<SeenMail>(100);
+    let mut writer_handle = task::spawn(db_writer(writer_conn, write_rx));
 
     // Simple client-side rate limiter: each API call waits for the next tick.
     let mut interval = tokio::time::interval(RATE_LIMIT_INTERVAL);
@@ -101,18 +101,31 @@ async fn main() -> anyhow::Result<()> {
     // Some kind of exponential backpressure on a worker would be nicer
     let mut retries = 0;
     loop {
-        // TODO: lol handle these better, i keep getting deadlocks but wanna just churn some emails
-        // retries += 1;
-        if retries > 3 {
-            panic!("Too many retries");
+        match work(&pool, &hub, &write_tx, &rate_limiter).await {
+            Ok(()) => break,
+            Err(e) => {
+                retries += 1;
+                if retries > 3 {
+                    return Err(e.context("too many retries"));
+                }
+                println!("Error encountered, retrying: {:?}", e);
+            }
         }
 
-        let res = work(&pool, &hub, &write_tx, &rate_limiter).await;
-        if res.is_ok() {
-            break;
+        // If the writer task died, its channel is closed and every future
+        // send would fail, so no retry could ever succeed. Surface the
+        // root-cause DB error and spawn a fresh writer so the retry has a
+        // chance of working (e.g. a transient "database is locked").
+        if writer_handle.is_finished() {
+            match writer_handle.await? {
+                Ok(()) => println!("DB writer task exited early; restarting it"),
+                Err(e) => println!("DB writer task failed, restarting it: {:?}", e),
+            }
+            let writer_conn = SqliteConnection::connect_with(&options).await?;
+            let (tx, rx) = mpsc::channel::<SeenMail>(100);
+            write_tx = tx;
+            writer_handle = task::spawn(db_writer(writer_conn, rx));
         }
-
-        println!("Error encountered, retrying: {:?}", res);
     }
 
     // Close the channel so the writer task drains its queue and exits, then
@@ -244,11 +257,7 @@ async fn fetch_message(
 
         match res {
             Ok((_, message)) => return Ok(message),
-            Err(google_gmail1::Error::Failure(ref response))
-                if attempts < MAX_FETCH_RETRIES
-                    && (response.status().as_u16() == 429
-                        || response.status().as_u16() == 403) =>
-            {
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_rate_limit_error(e) => {
                 attempts += 1;
                 println!(
                     "rate limited fetching {} (attempt {}), backing off for {:?}",
@@ -259,6 +268,41 @@ async fn fetch_message(
             }
             Err(e) => return Err(e.into()),
         }
+    }
+}
+
+/// Whether an API error is a rate-limit response that warrants backoff and retry.
+///
+/// The client library returns `Error::BadRequest(json)` when a non-success
+/// response body parses as JSON, and `Error::Failure(response)` only when it
+/// does not. Gmail's 429 (`rateLimitExceeded`/`RESOURCE_EXHAUSTED`) and
+/// rate-limit 403 (`userRateLimitExceeded`) responses carry Google's standard
+/// JSON error envelope, so they arrive as `BadRequest` and must be recognized
+/// by inspecting the embedded error code/status/reason.
+fn is_rate_limit_error(err: &google_gmail1::Error) -> bool {
+    match err {
+        google_gmail1::Error::BadRequest(value) => {
+            let error = &value["error"];
+            if error["code"].as_u64() == Some(429)
+                || error["status"].as_str() == Some("RESOURCE_EXHAUSTED")
+            {
+                return true;
+            }
+            // Rate-limit 403s are distinguished from permission 403s by their
+            // reason field.
+            error["errors"].as_array().into_iter().flatten().any(|e| {
+                matches!(
+                    e["reason"].as_str(),
+                    Some("rateLimitExceeded") | Some("userRateLimitExceeded")
+                )
+            })
+        }
+        // Non-JSON error bodies: fall back to the HTTP status code.
+        google_gmail1::Error::Failure(response) => {
+            let status = response.status().as_u16();
+            status == 429 || status == 403
+        }
+        _ => false,
     }
 }
 
