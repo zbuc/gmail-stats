@@ -117,3 +117,11 @@ tr.hidden-row td.act { opacity: 1; }
 }
 .pager button:disabled { opacity: 0.4; cursor: default; }
 .pager button:disabled:hover { border-color: var(--border); color: var(--fg); }
+.toggle select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+}

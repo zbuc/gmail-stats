@@ -55,6 +55,14 @@ $ cargo run</pre>
     </div>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter senders&hellip;" autocomplete="off">
+      <label class="toggle">Rows
+        <select id="page-size">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="500">500</option>
+        </select>
+      </label>
       <label class="toggle"><input id="show-hidden" type="checkbox"> Show hidden</label>
     </div>
     <table>

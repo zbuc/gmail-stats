@@ -3,8 +3,10 @@
 // Sender strings come from arbitrary From: headers and are attacker-controlled.
 // This page only ever renders them via textContent — never innerHTML.
 
-const PAGE_SIZE = 50;
+const PAGE_SIZES = [25, 50, 100, 500];
+const DEFAULT_PAGE_SIZE = 50;
 const HIDDEN_KEY = "gmail-stats.hiddenSenders";
+const PAGE_SIZE_KEY = "gmail-stats.pageSize";
 
 const views = ["loading", "setup", "error", "stats"];
 
@@ -12,9 +14,19 @@ const state = {
   data: null,
   query: "",
   page: 1,
+  pageSize: loadPageSize(),
   showHidden: false,
   hidden: loadHidden(),
 };
+
+function loadPageSize() {
+  try {
+    const stored = Number(localStorage.getItem(PAGE_SIZE_KEY));
+    return PAGE_SIZES.includes(stored) ? stored : DEFAULT_PAGE_SIZE;
+  } catch (err) {
+    return DEFAULT_PAGE_SIZE;
+  }
+}
 
 function loadHidden() {
   try {
@@ -107,10 +119,10 @@ function update() {
     listed = listed.filter(row => String(row.sender).toLowerCase().includes(query));
   }
 
-  const pages = Math.max(1, Math.ceil(listed.length / PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(listed.length / state.pageSize));
   state.page = Math.min(Math.max(1, state.page), pages);
-  const start = (state.page - 1) * PAGE_SIZE;
-  const pageRows = listed.slice(start, start + PAGE_SIZE);
+  const start = (state.page - 1) * state.pageSize;
+  const pageRows = listed.slice(start, start + state.pageSize);
 
   const tbody = document.getElementById("sender-rows");
   tbody.replaceChildren();
@@ -166,6 +178,18 @@ document.getElementById("retry-setup").addEventListener("click", load);
 document.getElementById("retry-error").addEventListener("click", load);
 document.getElementById("search").addEventListener("input", event => {
   state.query = event.target.value;
+  state.page = 1;
+  update();
+});
+document.getElementById("page-size").value = String(state.pageSize);
+document.getElementById("page-size").addEventListener("change", event => {
+  const size = Number(event.target.value);
+  state.pageSize = PAGE_SIZES.includes(size) ? size : DEFAULT_PAGE_SIZE;
+  try {
+    localStorage.setItem(PAGE_SIZE_KEY, String(state.pageSize));
+  } catch (err) {
+    // Storage unavailable — selection just won't survive reload.
+  }
   state.page = 1;
   update();
 });
