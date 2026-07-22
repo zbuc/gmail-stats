@@ -581,11 +581,15 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query("CREATE TABLE seen_mails (mail_id TEXT NOT NULL)")
+        // Mirror the production schema verbatim (see stats.db `.schema`), including
+        // the unrecognized `string` type name: SQLite gives such columns NUMERIC
+        // affinity rather than TEXT, and the tests should exercise the same
+        // affinity semantics the real database has.
+        sqlx::query("CREATE TABLE seen_mails (mail_id string)")
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE senders (sender TEXT NOT NULL, mails_sent INTEGER NOT NULL)")
+        sqlx::query("CREATE TABLE senders (sender string, mails_sent int)")
             .execute(&pool)
             .await
             .unwrap();
