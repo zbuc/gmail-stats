@@ -1,21 +1,5682 @@
 {
-  "total_messages": 2128,
-  "generated_at_unix": 1784678400,
-  "senders": [
-    { "sender": "newsletter@deals.shopping.example", "mails_sent": 412 },
-    { "sender": "notifications@social.example", "mails_sent": 388 },
-    { "sender": "no-reply@updates.example.com", "mails_sent": 265 },
-    { "sender": "alerts@bank.example", "mails_sent": 198 },
-    { "sender": "digest@news.example.org", "mails_sent": 187 },
-    { "sender": "team@project.example.net", "mails_sent": 154 },
-    { "sender": "receipts@store.example", "mails_sent": 112 },
-    { "sender": "support@service.example.com", "mails_sent": 96 },
-    { "sender": "alice@example.org", "mails_sent": 84 },
-    { "sender": "bob@example.net", "mails_sent": 61 },
-    { "sender": "promo@travel.example", "mails_sent": 57 },
-    { "sender": "security@accounts.example", "mails_sent": 43 },
-    { "sender": "calendar@invites.example", "mails_sent": 31 },
-    { "sender": "carol@example.com", "mails_sent": 26 },
-    { "sender": "hello@startup.example", "mails_sent": 14 }
-  ]
+ "total_messages": 84000,
+ "generated_at_unix": 1784764800,
+ "senders": [
+  {
+   "sender": "notifications@chatterloop.example",
+   "mails_sent": 6842
+  },
+  {
+   "sender": "friend-activity@mail.fotofling.example",
+   "mails_sent": 4517
+  },
+  {
+   "sender": "deals@shopsprout.example",
+   "mails_sent": 3911
+  },
+  {
+   "sender": "digest@workwren.example",
+   "mails_sent": 2930
+  },
+  {
+   "sender": "style@hemlinehaus.example",
+   "mails_sent": 2433
+  },
+  {
+   "sender": "newsletter@dailyantler.example",
+   "mails_sent": 2187
+  },
+  {
+   "sender": "offers@nibbledash.example",
+   "mails_sent": 2102
+  },
+  {
+   "sender": "jobalerts@careercroft.example",
+   "mails_sent": 1984
+  },
+  {
+   "sender": "updates@vibecircle.example.com",
+   "mails_sent": 1876
+  },
+  {
+   "sender": "alerts@coppervault.example",
+   "mails_sent": 1790
+  },
+  {
+   "sender": "deals@bargainburrow.example",
+   "mails_sent": 1754
+  },
+  {
+   "sender": "no-reply@hailbee.example",
+   "mails_sent": 1380
+  },
+  {
+   "sender": "newsletter@simmerclub.example",
+   "mails_sent": 1322
+  },
+  {
+   "sender": "shipping-updates@parcelpine.example",
+   "mails_sent": 1290
+  },
+  {
+   "sender": "promo@farefinch.example",
+   "mails_sent": 1289
+  },
+  {
+   "sender": "receipts@mintledger.example",
+   "mails_sent": 1210
+  },
+  {
+   "sender": "no-reply@streamvault.example.com",
+   "mails_sent": 1180
+  },
+  {
+   "sender": "receipts@nibbledash.example",
+   "mails_sent": 1148
+  },
+  {
+   "sender": "play@pixelmarsh.example",
+   "mails_sent": 1092
+  },
+  {
+   "sender": "digest@lists.kernelforge.example",
+   "mails_sent": 1034
+  },
+  {
+   "sender": "deals@nibbledash.example",
+   "mails_sent": 1000
+  },
+  {
+   "sender": "digest@lists.dailyantler.example",
+   "mails_sent": 900
+  },
+  {
+   "sender": "alerts@careercroft.example",
+   "mails_sent": 850
+  },
+  {
+   "sender": "promo@nibbledash.example",
+   "mails_sent": 760
+  },
+  {
+   "sender": "brief@dailyantler.example.org",
+   "mails_sent": 725
+  },
+  {
+   "sender": "no-reply@streamvault.example",
+   "mails_sent": 700
+  },
+  {
+   "sender": "reminders@careercroft.example",
+   "mails_sent": 649
+  },
+  {
+   "sender": "digest@pixelmarsh.example",
+   "mails_sent": 640
+  },
+  {
+   "sender": "friend-activity@mail.chatterloop.example",
+   "mails_sent": 600
+  },
+  {
+   "sender": "hello@dailyantler.example",
+   "mails_sent": 543
+  },
+  {
+   "sender": "sales@nibbledash.example.com",
+   "mails_sent": 508
+  },
+  {
+   "sender": "receipts@hailbee.example",
+   "mails_sent": 500
+  },
+  {
+   "sender": "statements@coppervault.example",
+   "mails_sent": 450
+  },
+  {
+   "sender": "noreply@streamvault.example.com",
+   "mails_sent": 420
+  },
+  {
+   "sender": "style@nibbledash.example",
+   "mails_sent": 420
+  },
+  {
+   "sender": "notify@careercroft.example.com",
+   "mails_sent": 411
+  },
+  {
+   "sender": "deb.whitfield@example.org",
+   "mails_sent": 342
+  },
+  {
+   "sender": "weekly@dailyantler.example.net",
+   "mails_sent": 313
+  },
+  {
+   "sender": "no-reply@mail.nibbledash.example",
+   "mails_sent": 298
+  },
+  {
+   "sender": "mentions@chatterloop.example",
+   "mails_sent": 287
+  },
+  {
+   "sender": "no-reply@alerts.careercroft.example",
+   "mails_sent": 283
+  },
+  {
+   "sender": "newsletter@nibbledash.example.net",
+   "mails_sent": 280
+  },
+  {
+   "sender": "security@streamvault.example",
+   "mails_sent": 269
+  },
+  {
+   "sender": "marcus.trell@example.net",
+   "mails_sent": 261
+  },
+  {
+   "sender": "updates@news.dailyantler.example",
+   "mails_sent": 261
+  },
+  {
+   "sender": "updates@careercroft.example.net",
+   "mails_sent": 238
+  },
+  {
+   "sender": "community@pixelmarsh.example",
+   "mails_sent": 234
+  },
+  {
+   "sender": "security@coppervault.example",
+   "mails_sent": 233
+  },
+  {
+   "sender": "digest@lists.simmerclub.example",
+   "mails_sent": 230
+  },
+  {
+   "sender": "brief@simmerclub.example.org",
+   "mails_sent": 220
+  },
+  {
+   "sender": "events@pixelmarsh.example.org",
+   "mails_sent": 220
+  },
+  {
+   "sender": "orders@hailbee.example",
+   "mails_sent": 217
+  },
+  {
+   "sender": "offers@farefinch.example.com",
+   "mails_sent": 216
+  },
+  {
+   "sender": "hello@nibbledash.example.org",
+   "mails_sent": 214
+  },
+  {
+   "sender": "security@chatterloop.example",
+   "mails_sent": 205
+  },
+  {
+   "sender": "offers@shopsprout.example",
+   "mails_sent": 204
+  },
+  {
+   "sender": "team@streamvault.example",
+   "mails_sent": 202
+  },
+  {
+   "sender": "promo@shopsprout.example",
+   "mails_sent": 200
+  },
+  {
+   "sender": "hello@simmerclub.example",
+   "mails_sent": 196
+  },
+  {
+   "sender": "billing@coppervault.example.com",
+   "mails_sent": 188
+  },
+  {
+   "sender": "priya.raman@example.com",
+   "mails_sent": 187
+  },
+  {
+   "sender": "sales@shopsprout.example.com",
+   "mails_sent": 173
+  },
+  {
+   "sender": "hello@streamvault.example.net",
+   "mails_sent": 160
+  },
+  {
+   "sender": "receipts@coppervault.example",
+   "mails_sent": 159
+  },
+  {
+   "sender": "digest@chatterloop.example",
+   "mails_sent": 158
+  },
+  {
+   "sender": "shipping-updates@hailbee.example",
+   "mails_sent": 155
+  },
+  {
+   "sender": "alerts@pricewren.example",
+   "mails_sent": 154
+  },
+  {
+   "sender": "jobalerts@pricewren.example",
+   "mails_sent": 153
+  },
+  {
+   "sender": "style@shopsprout.example",
+   "mails_sent": 151
+  },
+  {
+   "sender": "updates@mail.streamvault.example",
+   "mails_sent": 147
+  },
+  {
+   "sender": "reminders@pricewren.example",
+   "mails_sent": 142
+  },
+  {
+   "sender": "newsletter@shopsprout.example.net",
+   "mails_sent": 139
+  },
+  {
+   "sender": "no-reply@mail.shopsprout.example",
+   "mails_sent": 139
+  },
+  {
+   "sender": "notify@pricewren.example.com",
+   "mails_sent": 139
+  },
+  {
+   "sender": "updates@chatterloop.example.com",
+   "mails_sent": 139
+  },
+  {
+   "sender": "updates@news.simmerclub.example",
+   "mails_sent": 137
+  },
+  {
+   "sender": "weekly@simmerclub.example.net",
+   "mails_sent": 137
+  },
+  {
+   "sender": "no-reply@alerts.pricewren.example",
+   "mails_sent": 136
+  },
+  {
+   "sender": "no-reply@chatterloop.example.net",
+   "mails_sent": 134
+  },
+  {
+   "sender": "no-reply@alerts.coppervault.example",
+   "mails_sent": 133
+  },
+  {
+   "sender": "no-reply@lists.pixelmarsh.example",
+   "mails_sent": 128
+  },
+  {
+   "sender": "hello@shopsprout.example.org",
+   "mails_sent": 126
+  },
+  {
+   "sender": "support@coppervault.example.net",
+   "mails_sent": 122
+  },
+  {
+   "sender": "alerts@mintledger.example",
+   "mails_sent": 121
+  },
+  {
+   "sender": "quincy.iverson@example.org",
+   "mails_sent": 120
+  },
+  {
+   "sender": "deals@shopburrow.example",
+   "mails_sent": 118
+  },
+  {
+   "sender": "offers@shopburrow.example",
+   "mails_sent": 118
+  },
+  {
+   "sender": "billing@hailbee.example.com",
+   "mails_sent": 116
+  },
+  {
+   "sender": "support@streamvault.example.org",
+   "mails_sent": 116
+  },
+  {
+   "sender": "newsletter@kernelforge.example",
+   "mails_sent": 115
+  },
+  {
+   "sender": "orders@mail.hailbee.example.net",
+   "mails_sent": 110
+  },
+  {
+   "sender": "no-reply@hostpocket.example",
+   "mails_sent": 108
+  },
+  {
+   "sender": "statements@mintledger.example",
+   "mails_sent": 107
+  },
+  {
+   "sender": "brief@kernelforge.example.org",
+   "mails_sent": 105
+  },
+  {
+   "sender": "updates@pricewren.example.net",
+   "mails_sent": 104
+  },
+  {
+   "sender": "hello@kernelforge.example",
+   "mails_sent": 103
+  },
+  {
+   "sender": "security@mintledger.example",
+   "mails_sent": 103
+  },
+  {
+   "sender": "weekly@kernelforge.example.net",
+   "mails_sent": 102
+  },
+  {
+   "sender": "dario.xiang@example.net",
+   "mails_sent": 101
+  },
+  {
+   "sender": "news@pixelmarsh.example.net",
+   "mails_sent": 99
+  },
+  {
+   "sender": "digest@questloft.example",
+   "mails_sent": 97
+  },
+  {
+   "sender": "promo@shopburrow.example",
+   "mails_sent": 97
+  },
+  {
+   "sender": "updates@news.kernelforge.example",
+   "mails_sent": 94
+  },
+  {
+   "sender": "events@leadloft.example",
+   "mails_sent": 90
+  },
+  {
+   "sender": "hello@leadloft.example",
+   "mails_sent": 90
+  },
+  {
+   "sender": "team@leadloft.example.com",
+   "mails_sent": 90
+  },
+  {
+   "sender": "noreply@hostpocket.example.com",
+   "mails_sent": 89
+  },
+  {
+   "sender": "sales@shopburrow.example.com",
+   "mails_sent": 88
+  },
+  {
+   "sender": "billing@mintledger.example.com",
+   "mails_sent": 87
+  },
+  {
+   "sender": "hello@chatterloop.example",
+   "mails_sent": 87
+  },
+  {
+   "sender": "jules.petrov@example.com",
+   "mails_sent": 86
+  },
+  {
+   "sender": "notifications@fotofling.example",
+   "mails_sent": 86
+  },
+  {
+   "sender": "mentions@fotofling.example",
+   "mails_sent": 85
+  },
+  {
+   "sender": "receipts@parcelpine.example",
+   "mails_sent": 85
+  },
+  {
+   "sender": "style@shopburrow.example",
+   "mails_sent": 85
+  },
+  {
+   "sender": "play@questloft.example",
+   "mails_sent": 83
+  },
+  {
+   "sender": "alerts@stormglass.example",
+   "mails_sent": 82
+  },
+  {
+   "sender": "jobalerts@stormglass.example",
+   "mails_sent": 81
+  },
+  {
+   "sender": "no-reply@farefinch.example",
+   "mails_sent": 81
+  },
+  {
+   "sender": "no-reply@mail.shopburrow.example",
+   "mails_sent": 81
+  },
+  {
+   "sender": "orders@parcelpine.example",
+   "mails_sent": 81
+  },
+  {
+   "sender": "newsletter@shopburrow.example.net",
+   "mails_sent": 79
+  },
+  {
+   "sender": "reminders@stormglass.example",
+   "mails_sent": 79
+  },
+  {
+   "sender": "community@questloft.example",
+   "mails_sent": 78
+  },
+  {
+   "sender": "hello@shopburrow.example.org",
+   "mails_sent": 78
+  },
+  {
+   "sender": "newsletter@quillandbean.example",
+   "mails_sent": 77
+  },
+  {
+   "sender": "notify@stormglass.example.com",
+   "mails_sent": 75
+  },
+  {
+   "sender": "deals@shophaus.example",
+   "mails_sent": 74
+  },
+  {
+   "sender": "no-reply@alerts.stormglass.example",
+   "mails_sent": 73
+  },
+  {
+   "sender": "offers@shophaus.example",
+   "mails_sent": 72
+  },
+  {
+   "sender": "updates@stormglass.example.net",
+   "mails_sent": 72
+  },
+  {
+   "sender": "digest@lists.quillandbean.example",
+   "mails_sent": 71
+  },
+  {
+   "sender": "promo@shophaus.example",
+   "mails_sent": 71
+  },
+  {
+   "sender": "alerts@streakly.example",
+   "mails_sent": 70
+  },
+  {
+   "sender": "security@fotofling.example",
+   "mails_sent": 69
+  },
+  {
+   "sender": "security@hostpocket.example",
+   "mails_sent": 69
+  },
+  {
+   "sender": "sales@shophaus.example.com",
+   "mails_sent": 68
+  },
+  {
+   "sender": "style@shophaus.example",
+   "mails_sent": 68
+  },
+  {
+   "sender": "brief@quillandbean.example.org",
+   "mails_sent": 67
+  },
+  {
+   "sender": "digest@fotofling.example",
+   "mails_sent": 67
+  },
+  {
+   "sender": "no-reply@mail.shophaus.example",
+   "mails_sent": 67
+  },
+  {
+   "sender": "jobalerts@streakly.example",
+   "mails_sent": 66
+  },
+  {
+   "sender": "no-reply@alerts.mintledger.example",
+   "mails_sent": 66
+  },
+  {
+   "sender": "reminders@streakly.example",
+   "mails_sent": 66
+  },
+  {
+   "sender": "newsletter@shophaus.example.net",
+   "mails_sent": 65
+  },
+  {
+   "sender": "no-reply@leadloft.example.net",
+   "mails_sent": 65
+  },
+  {
+   "sender": "hello@shophaus.example.org",
+   "mails_sent": 64
+  },
+  {
+   "sender": "team@hostpocket.example",
+   "mails_sent": 64
+  },
+  {
+   "sender": "no-reply@parcelpine.example",
+   "mails_sent": 63
+  },
+  {
+   "sender": "hello@quillandbean.example",
+   "mails_sent": 62
+  },
+  {
+   "sender": "support@mintledger.example.net",
+   "mails_sent": 62
+  },
+  {
+   "sender": "alerts@firstacorn.example",
+   "mails_sent": 61
+  },
+  {
+   "sender": "deals@shopcraze.example",
+   "mails_sent": 61
+  },
+  {
+   "sender": "itinerary@farefinch.example.net",
+   "mails_sent": 61
+  },
+  {
+   "sender": "notify@streakly.example.com",
+   "mails_sent": 61
+  },
+  {
+   "sender": "weekly@quillandbean.example.net",
+   "mails_sent": 61
+  },
+  {
+   "sender": "offers@shopcraze.example",
+   "mails_sent": 60
+  },
+  {
+   "sender": "updates@news.quillandbean.example",
+   "mails_sent": 60
+  },
+  {
+   "sender": "billing@parcelpine.example.com",
+   "mails_sent": 59
+  },
+  {
+   "sender": "promo@shopcraze.example",
+   "mails_sent": 59
+  },
+  {
+   "sender": "events@questloft.example.org",
+   "mails_sent": 58
+  },
+  {
+   "sender": "hello@hostpocket.example.net",
+   "mails_sent": 58
+  },
+  {
+   "sender": "newsletter@morningazette.example",
+   "mails_sent": 58
+  },
+  {
+   "sender": "no-reply@alerts.streakly.example",
+   "mails_sent": 57
+  },
+  {
+   "sender": "sales@shopcraze.example.com",
+   "mails_sent": 57
+  },
+  {
+   "sender": "style@shopcraze.example",
+   "mails_sent": 57
+  },
+  {
+   "sender": "deals@mail.farefinch.example",
+   "mails_sent": 56
+  },
+  {
+   "sender": "orders@mail.parcelpine.example.net",
+   "mails_sent": 56
+  },
+  {
+   "sender": "statements@firstacorn.example",
+   "mails_sent": 56
+  },
+  {
+   "sender": "carys63@example.com",
+   "mails_sent": 55
+  },
+  {
+   "sender": "digest@lists.morningazette.example",
+   "mails_sent": 55
+  },
+  {
+   "sender": "outreach@mail.leadloft.example",
+   "mails_sent": 55
+  },
+  {
+   "sender": "info@leadloft.example.org",
+   "mails_sent": 54
+  },
+  {
+   "sender": "no-reply@lists.questloft.example",
+   "mails_sent": 54
+  },
+  {
+   "sender": "security@firstacorn.example",
+   "mails_sent": 54
+  },
+  {
+   "sender": "updates@mail.hostpocket.example",
+   "mails_sent": 54
+  },
+  {
+   "sender": "no-reply@mail.shopcraze.example",
+   "mails_sent": 53
+  },
+  {
+   "sender": "orders@nibbledash.example",
+   "mails_sent": 53
+  },
+  {
+   "sender": "support@hostpocket.example.org",
+   "mails_sent": 53
+  },
+  {
+   "sender": "hello@fotofling.example",
+   "mails_sent": 52
+  },
+  {
+   "sender": "newsletter@shopcraze.example.net",
+   "mails_sent": 52
+  },
+  {
+   "sender": "no-reply@fotofling.example.net",
+   "mails_sent": 52
+  },
+  {
+   "sender": "updates@fotofling.example.com",
+   "mails_sent": 52
+  },
+  {
+   "sender": "brief@morningazette.example.org",
+   "mails_sent": 51
+  },
+  {
+   "sender": "digest@dungeondrift.example",
+   "mails_sent": 51
+  },
+  {
+   "sender": "hello@webinarbarn.example",
+   "mails_sent": 51
+  },
+  {
+   "sender": "news@questloft.example.net",
+   "mails_sent": 51
+  },
+  {
+   "sender": "notifications@pingpond.example",
+   "mails_sent": 51
+  },
+  {
+   "sender": "friend-activity@mail.pingpond.example",
+   "mails_sent": 50
+  },
+  {
+   "sender": "community@dungeondrift.example",
+   "mails_sent": 49
+  },
+  {
+   "sender": "events@dungeondrift.example.org",
+   "mails_sent": 49
+  },
+  {
+   "sender": "hello@shopcraze.example.org",
+   "mails_sent": 49
+  },
+  {
+   "sender": "no-reply@cloudcrate.example",
+   "mails_sent": 49
+  },
+  {
+   "sender": "noreply@cloudcrate.example.com",
+   "mails_sent": 49
+  },
+  {
+   "sender": "play@dungeondrift.example",
+   "mails_sent": 49
+  },
+  {
+   "sender": "updates@streakly.example.net",
+   "mails_sent": 49
+  },
+  {
+   "sender": "deals@shoprush.example",
+   "mails_sent": 48
+  },
+  {
+   "sender": "hello@morningazette.example",
+   "mails_sent": 48
+  },
+  {
+   "sender": "no-reply@nibbledash.example",
+   "mails_sent": 48
+  },
+  {
+   "sender": "alerts@uptimeowl.example",
+   "mails_sent": 47
+  },
+  {
+   "sender": "billing@firstacorn.example.com",
+   "mails_sent": 47
+  },
+  {
+   "sender": "jobalerts@uptimeowl.example",
+   "mails_sent": 47
+  },
+  {
+   "sender": "offers@shoprush.example",
+   "mails_sent": 47
+  },
+  {
+   "sender": "shipping-updates@nibbledash.example",
+   "mails_sent": 47
+  },
+  {
+   "sender": "no-reply@alerts.uptimeowl.example",
+   "mails_sent": 46
+  },
+  {
+   "sender": "notify@uptimeowl.example.com",
+   "mails_sent": 46
+  },
+  {
+   "sender": "reminders@uptimeowl.example",
+   "mails_sent": 46
+  },
+  {
+   "sender": "weekly@morningazette.example.net",
+   "mails_sent": 46
+  },
+  {
+   "sender": "mentions@pingpond.example",
+   "mails_sent": 45
+  },
+  {
+   "sender": "promo@shoprush.example",
+   "mails_sent": 45
+  },
+  {
+   "sender": "sales@shoprush.example.com",
+   "mails_sent": 45
+  },
+  {
+   "sender": "security@cloudcrate.example",
+   "mails_sent": 45
+  },
+  {
+   "sender": "team@webinarbarn.example.com",
+   "mails_sent": 45
+  },
+  {
+   "sender": "billing@nibbledash.example.com",
+   "mails_sent": 44
+  },
+  {
+   "sender": "updates@news.morningazette.example",
+   "mails_sent": 44
+  },
+  {
+   "sender": "events@webinarbarn.example",
+   "mails_sent": 43
+  },
+  {
+   "sender": "no-reply@webinarbarn.example.net",
+   "mails_sent": 43
+  },
+  {
+   "sender": "orders@mail.nibbledash.example.net",
+   "mails_sent": 43
+  },
+  {
+   "sender": "outreach@mail.webinarbarn.example",
+   "mails_sent": 43
+  },
+  {
+   "sender": "receipts@firstacorn.example",
+   "mails_sent": 43
+  },
+  {
+   "sender": "updates@uptimeowl.example.net",
+   "mails_sent": 43
+  },
+  {
+   "sender": "alerts@dripwatch.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "digest@lists.stackbrew.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "hello@surveyglade.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "info@webinarbarn.example.org",
+   "mails_sent": 42
+  },
+  {
+   "sender": "newsletter@stackbrew.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "receipts@appcove.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "security@pingpond.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "style@shoprush.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "team@cloudcrate.example",
+   "mails_sent": 42
+  },
+  {
+   "sender": "brief@stackbrew.example.org",
+   "mails_sent": 41
+  },
+  {
+   "sender": "digest@pingpond.example",
+   "mails_sent": 41
+  },
+  {
+   "sender": "hello@stackbrew.example",
+   "mails_sent": 41
+  },
+  {
+   "sender": "no-reply@mail.shoprush.example",
+   "mails_sent": 41
+  },
+  {
+   "sender": "jobalerts@dripwatch.example",
+   "mails_sent": 40
+  },
+  {
+   "sender": "newsletter@shoprush.example.net",
+   "mails_sent": 40
+  },
+  {
+   "sender": "no-reply@alerts.firstacorn.example",
+   "mails_sent": 40
+  },
+  {
+   "sender": "support@firstacorn.example.net",
+   "mails_sent": 40
+  },
+  {
+   "sender": "team@surveyglade.example.com",
+   "mails_sent": 40
+  },
+  {
+   "sender": "alerts@lakestonecu.example",
+   "mails_sent": 39
+  },
+  {
+   "sender": "events@surveyglade.example",
+   "mails_sent": 39
+  },
+  {
+   "sender": "hello@shoprush.example.org",
+   "mails_sent": 39
+  },
+  {
+   "sender": "reminders@dripwatch.example",
+   "mails_sent": 39
+  },
+  {
+   "sender": "statements@lakestonecu.example",
+   "mails_sent": 39
+  },
+  {
+   "sender": "weekly@stackbrew.example.net",
+   "mails_sent": 39
+  },
+  {
+   "sender": "{f}rosales@example.net",
+   "mails_sent": 39
+  },
+  {
+   "sender": "bram.lindqvist@example.org",
+   "mails_sent": 38
+  },
+  {
+   "sender": "brief@inkwelt.example.org",
+   "mails_sent": 38
+  },
+  {
+   "sender": "deals@shopotter.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "digest@lists.inkwelt.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "newsletter@inkwelt.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "notify@dripwatch.example.com",
+   "mails_sent": 38
+  },
+  {
+   "sender": "offers@shopotter.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "promo@shopotter.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "sales@shopotter.example.com",
+   "mails_sent": 38
+  },
+  {
+   "sender": "security@lakestonecu.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "style@shopotter.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "updates@news.stackbrew.example",
+   "mails_sent": 38
+  },
+  {
+   "sender": "billing@lakestonecu.example.com",
+   "mails_sent": 37
+  },
+  {
+   "sender": "hello@inkwelt.example",
+   "mails_sent": 37
+  },
+  {
+   "sender": "no-reply@alerts.dripwatch.example",
+   "mails_sent": 37
+  },
+  {
+   "sender": "no-reply@mail.shopotter.example",
+   "mails_sent": 37
+  },
+  {
+   "sender": "reservations@farefinch.example",
+   "mails_sent": 37
+  },
+  {
+   "sender": "deals@shopbasket.example",
+   "mails_sent": 36
+  },
+  {
+   "sender": "hello@shopotter.example.org",
+   "mails_sent": 36
+  },
+  {
+   "sender": "newsletter@shopotter.example.net",
+   "mails_sent": 36
+  },
+  {
+   "sender": "orders@appcove.example",
+   "mails_sent": 36
+  },
+  {
+   "sender": "quincy.ashdown@example.net",
+   "mails_sent": 36
+  },
+  {
+   "sender": "receipts@lakestonecu.example",
+   "mails_sent": 36
+  },
+  {
+   "sender": "updates@dripwatch.example.net",
+   "mails_sent": 36
+  },
+  {
+   "sender": "weekly@inkwelt.example.net",
+   "mails_sent": 36
+  },
+  {
+   "sender": "no-reply@alerts.lakestonecu.example",
+   "mails_sent": 35
+  },
+  {
+   "sender": "no-reply@surveyglade.example.net",
+   "mails_sent": 35
+  },
+  {
+   "sender": "offers@shopbasket.example",
+   "mails_sent": 35
+  },
+  {
+   "sender": "promo@roamnest.example",
+   "mails_sent": 35
+  },
+  {
+   "sender": "support@lakestonecu.example.net",
+   "mails_sent": 35
+  },
+  {
+   "sender": "updates@news.inkwelt.example",
+   "mails_sent": 35
+  },
+  {
+   "sender": "alerts@oakstonecredit.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "alerts@pantrybot.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "digest@lists.dailyledger.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "newsletter@dailyledger.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "no-reply@lists.dungeondrift.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "promo@shopbasket.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "sales@shopbasket.example.com",
+   "mails_sent": 34
+  },
+  {
+   "sender": "statements@oakstonecredit.example",
+   "mails_sent": 34
+  },
+  {
+   "sender": "brief@dailyledger.example.org",
+   "mails_sent": 33
+  },
+  {
+   "sender": "hello@cloudcrate.example.net",
+   "mails_sent": 33
+  },
+  {
+   "sender": "hello@dailyledger.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "jobalerts@pantrybot.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "no-reply@appcove.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "no-reply@mail.shopbasket.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "security@oakstonecredit.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "style@shopbasket.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "updates@mail.cloudcrate.example",
+   "mails_sent": 33
+  },
+  {
+   "sender": "updates@pingpond.example.com",
+   "mails_sent": 33
+  },
+  {
+   "sender": "billing@oakstonecredit.example.com",
+   "mails_sent": 32
+  },
+  {
+   "sender": "digest@forumhollow.example",
+   "mails_sent": 32
+  },
+  {
+   "sender": "news@dungeondrift.example.net",
+   "mails_sent": 32
+  },
+  {
+   "sender": "newsletter@shopbasket.example.net",
+   "mails_sent": 32
+  },
+  {
+   "sender": "shipping-updates@appcove.example",
+   "mails_sent": 32
+  },
+  {
+   "sender": "weekly@dailyledger.example.net",
+   "mails_sent": 32
+  },
+  {
+   "sender": "community@forumhollow.example",
+   "mails_sent": 31
+  },
+  {
+   "sender": "newsletter@dailyskillet.example",
+   "mails_sent": 31
+  },
+  {
+   "sender": "play@forumhollow.example",
+   "mails_sent": 31
+  },
+  {
+   "sender": "support@cloudcrate.example.org",
+   "mails_sent": 31
+  },
+  {
+   "sender": "updates@news.dailyledger.example",
+   "mails_sent": 31
+  },
+  {
+   "sender": "billing@appcove.example.com",
+   "mails_sent": 30
+  },
+  {
+   "sender": "deals@shopmarket.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "digest@lists.dailyskillet.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "hello@shopbasket.example.org",
+   "mails_sent": 30
+  },
+  {
+   "sender": "info@surveyglade.example.org",
+   "mails_sent": 30
+  },
+  {
+   "sender": "no-reply@snapmill.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "offers@shopmarket.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "orders@mail.appcove.example.net",
+   "mails_sent": 30
+  },
+  {
+   "sender": "outreach@mail.surveyglade.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "promo@shopmarket.example",
+   "mails_sent": 30
+  },
+  {
+   "sender": "sales@shopmarket.example.com",
+   "mails_sent": 30
+  },
+  {
+   "sender": "brief@dailyskillet.example.org",
+   "mails_sent": 29
+  },
+  {
+   "sender": "hello@growthgrackle.example",
+   "mails_sent": 29
+  },
+  {
+   "sender": "receipts@oakstonecredit.example",
+   "mails_sent": 29
+  },
+  {
+   "sender": "style@shopmarket.example",
+   "mails_sent": 29
+  },
+  {
+   "sender": "deals@shopgoods.example",
+   "mails_sent": 28
+  },
+  {
+   "sender": "events@forumhollow.example.org",
+   "mails_sent": 28
+  },
+  {
+   "sender": "hello@shopmarket.example.org",
+   "mails_sent": 28
+  },
+  {
+   "sender": "newsletter@shopmarket.example.net",
+   "mails_sent": 28
+  },
+  {
+   "sender": "no-reply@alerts.oakstonecredit.example",
+   "mails_sent": 28
+  },
+  {
+   "sender": "no-reply@mail.shopmarket.example",
+   "mails_sent": 28
+  },
+  {
+   "sender": "noreply@snapmill.example.com",
+   "mails_sent": 28
+  },
+  {
+   "sender": "security@snapmill.example",
+   "mails_sent": 28
+  },
+  {
+   "sender": "team@growthgrackle.example.com",
+   "mails_sent": 28
+  },
+  {
+   "sender": "events@growthgrackle.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "hello@dailyskillet.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "hello@snapmill.example.net",
+   "mails_sent": 27
+  },
+  {
+   "sender": "offers@roamnest.example.com",
+   "mails_sent": 27
+  },
+  {
+   "sender": "offers@shopgoods.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "promo@shopgoods.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "receipts@cartonhawk.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "reminders@pantrybot.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "sales@shopgoods.example.com",
+   "mails_sent": 27
+  },
+  {
+   "sender": "style@shopgoods.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "support@oakstonecredit.example.net",
+   "mails_sent": 27
+  },
+  {
+   "sender": "team@snapmill.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "updates@mail.snapmill.example",
+   "mails_sent": 27
+  },
+  {
+   "sender": "weekly@dailyskillet.example.net",
+   "mails_sent": 27
+  },
+  {
+   "sender": "alerts@granitetrust.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "digest@lists.dailycircuit.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "hello@shopgoods.example.org",
+   "mails_sent": 26
+  },
+  {
+   "sender": "info@growthgrackle.example.org",
+   "mails_sent": 26
+  },
+  {
+   "sender": "news@forumhollow.example.net",
+   "mails_sent": 26
+  },
+  {
+   "sender": "newsletter@dailycircuit.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "newsletter@shopgoods.example.net",
+   "mails_sent": 26
+  },
+  {
+   "sender": "no-reply@growthgrackle.example.net",
+   "mails_sent": 26
+  },
+  {
+   "sender": "no-reply@lists.forumhollow.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "no-reply@mail.shopgoods.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "outreach@mail.growthgrackle.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "statements@granitetrust.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "updates@news.dailyskillet.example",
+   "mails_sent": 26
+  },
+  {
+   "sender": "alerts@ridgevolt.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "billing@granitetrust.example.com",
+   "mails_sent": 25
+  },
+  {
+   "sender": "brief@dailycircuit.example.org",
+   "mails_sent": 25
+  },
+  {
+   "sender": "deals@shopsupply.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "hello@dailycircuit.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "hello@pitchpigeon.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "no-reply@alerts.granitetrust.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "notify@pantrybot.example.com",
+   "mails_sent": 25
+  },
+  {
+   "sender": "offers@shopsupply.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "promo@shopsupply.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "receipts@granitetrust.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "security@granitetrust.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "security@ridgevolt.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "statements@ridgevolt.example",
+   "mails_sent": 25
+  },
+  {
+   "sender": "support@granitetrust.example.net",
+   "mails_sent": 25
+  },
+  {
+   "sender": "community@modmeadow.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "digest@lists.dailypaddock.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "digest@modmeadow.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "newsletter@dailypaddock.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "no-reply@notesnest.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "noor.abernathy@example.com",
+   "mails_sent": 24
+  },
+  {
+   "sender": "play@modmeadow.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "priya87@example.com",
+   "mails_sent": 24
+  },
+  {
+   "sender": "support@snapmill.example.org",
+   "mails_sent": 24
+  },
+  {
+   "sender": "team@pitchpigeon.example.com",
+   "mails_sent": 24
+  },
+  {
+   "sender": "updates@news.dailycircuit.example",
+   "mails_sent": 24
+  },
+  {
+   "sender": "weekly@dailycircuit.example.net",
+   "mails_sent": 24
+  },
+  {
+   "sender": "brief@dailypaddock.example.org",
+   "mails_sent": 23
+  },
+  {
+   "sender": "deals@shopoutfitters.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "hello@dailypaddock.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "hello@shopsupply.example.org",
+   "mails_sent": 23
+  },
+  {
+   "sender": "newsletter@shopsupply.example.net",
+   "mails_sent": 23
+  },
+  {
+   "sender": "no-reply@cartonhawk.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "no-reply@mail.shopoutfitters.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "no-reply@mail.shopsupply.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "noreply@notesnest.example.com",
+   "mails_sent": 23
+  },
+  {
+   "sender": "offers@shopoutfitters.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "orders@cartonhawk.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "promo@shopoutfitters.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "sales@shopoutfitters.example.com",
+   "mails_sent": 23
+  },
+  {
+   "sender": "sales@shopsupply.example.com",
+   "mails_sent": 23
+  },
+  {
+   "sender": "security@notesnest.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "style@shopoutfitters.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "style@shopsupply.example",
+   "mails_sent": 23
+  },
+  {
+   "sender": "deals@shopvault.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "events@modmeadow.example.org",
+   "mails_sent": 22
+  },
+  {
+   "sender": "events@pitchpigeon.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "hello@notesnest.example.net",
+   "mails_sent": 22
+  },
+  {
+   "sender": "hello@shopoutfitters.example.org",
+   "mails_sent": 22
+  },
+  {
+   "sender": "newsletter@dailygazette.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "newsletter@shopoutfitters.example.net",
+   "mails_sent": 22
+  },
+  {
+   "sender": "no-reply@pitchpigeon.example.net",
+   "mails_sent": 22
+  },
+  {
+   "sender": "no-reply@roamnest.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "offers@shopvault.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "outreach@mail.pitchpigeon.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "promo@shopvault.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "shipping-updates@cartonhawk.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "team@notesnest.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "updates@news.dailypaddock.example",
+   "mails_sent": 22
+  },
+  {
+   "sender": "weekly@dailypaddock.example.net",
+   "mails_sent": 22
+  },
+  {
+   "sender": "billing@cartonhawk.example.com",
+   "mails_sent": 21
+  },
+  {
+   "sender": "brief@dailygazette.example.org",
+   "mails_sent": 21
+  },
+  {
+   "sender": "digest@lists.dailygazette.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "hello@dailygazette.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "hello@funnelfox.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "info@pitchpigeon.example.org",
+   "mails_sent": 21
+  },
+  {
+   "sender": "no-reply@mail.shopvault.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "sales@shopvault.example.com",
+   "mails_sent": 21
+  },
+  {
+   "sender": "style@shopvault.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "support@notesnest.example.org",
+   "mails_sent": 21
+  },
+  {
+   "sender": "team@funnelfox.example.com",
+   "mails_sent": 21
+  },
+  {
+   "sender": "updates@mail.notesnest.example",
+   "mails_sent": 21
+  },
+  {
+   "sender": "weekly@dailygazette.example.net",
+   "mails_sent": 21
+  },
+  {
+   "sender": "brief@dailydispatch.example.org",
+   "mails_sent": 20
+  },
+  {
+   "sender": "deals@dealsprout.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "digest@lists.dailydispatch.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "events@funnelfox.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "hello@passkeep.example.net",
+   "mails_sent": 20
+  },
+  {
+   "sender": "hello@shopvault.example.org",
+   "mails_sent": 20
+  },
+  {
+   "sender": "newsletter@dailydispatch.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "newsletter@dealsprout.example.net",
+   "mails_sent": 20
+  },
+  {
+   "sender": "newsletter@shopvault.example.net",
+   "mails_sent": 20
+  },
+  {
+   "sender": "no-reply@funnelfox.example.net",
+   "mails_sent": 20
+  },
+  {
+   "sender": "no-reply@mail.dealsprout.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "no-reply@passkeep.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "noreply@passkeep.example.com",
+   "mails_sent": 20
+  },
+  {
+   "sender": "offers@dealsprout.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "orders@mail.cartonhawk.example.net",
+   "mails_sent": 20
+  },
+  {
+   "sender": "promo@dealsprout.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "receipts@swiftsparrow.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "sales@dealsprout.example.com",
+   "mails_sent": 20
+  },
+  {
+   "sender": "security@passkeep.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "style@dealsprout.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "team@passkeep.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "updates@news.dailygazette.example",
+   "mails_sent": 20
+  },
+  {
+   "sender": "deals@dealburrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "deals@dealhaus.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "hello@dailydispatch.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "hello@dealburrow.example.org",
+   "mails_sent": 19
+  },
+  {
+   "sender": "hello@dealsprout.example.org",
+   "mails_sent": 19
+  },
+  {
+   "sender": "hello@demodrake.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "info@funnelfox.example.org",
+   "mails_sent": 19
+  },
+  {
+   "sender": "newsletter@dailyalmanac.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "newsletter@dealburrow.example.net",
+   "mails_sent": 19
+  },
+  {
+   "sender": "no-reply@lists.modmeadow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "no-reply@mail.dealburrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "no-reply@swiftsparrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "offers@dealburrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "orders@swiftsparrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "outreach@mail.funnelfox.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "promo@dealburrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "sales@dealburrow.example.com",
+   "mails_sent": 19
+  },
+  {
+   "sender": "shipping-updates@swiftsparrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "style@dealburrow.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "team@demodrake.example.com",
+   "mails_sent": 19
+  },
+  {
+   "sender": "updates@news.dailydispatch.example",
+   "mails_sent": 19
+  },
+  {
+   "sender": "weekly@dailydispatch.example.net",
+   "mails_sent": 19
+  },
+  {
+   "sender": "{f}whitfield@example.net",
+   "mails_sent": 19
+  },
+  {
+   "sender": "billing@swiftsparrow.example.com",
+   "mails_sent": 18
+  },
+  {
+   "sender": "brief@dailyalmanac.example.org",
+   "mails_sent": 18
+  },
+  {
+   "sender": "deals@dealcraze.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "deals@mail.roamnest.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "digest@lists.dailyalmanac.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "events@demodrake.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "hello@dailyalmanac.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "hello@dealhaus.example.org",
+   "mails_sent": 18
+  },
+  {
+   "sender": "itinerary@roamnest.example.net",
+   "mails_sent": 18
+  },
+  {
+   "sender": "maeve.petrov@example.org",
+   "mails_sent": 18
+  },
+  {
+   "sender": "newsletter@dealhaus.example.net",
+   "mails_sent": 18
+  },
+  {
+   "sender": "no-reply@demodrake.example.net",
+   "mails_sent": 18
+  },
+  {
+   "sender": "no-reply@mail.dealhaus.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "no-reply@reelriver.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "offers@dealhaus.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "promo@dealhaus.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "sales@dealhaus.example.com",
+   "mails_sent": 18
+  },
+  {
+   "sender": "style@dealhaus.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "support@passkeep.example.org",
+   "mails_sent": 18
+  },
+  {
+   "sender": "updates@mail.passkeep.example",
+   "mails_sent": 18
+  },
+  {
+   "sender": "weekly@dailyalmanac.example.net",
+   "mails_sent": 18
+  },
+  {
+   "sender": "brief@dailygrind.example.org",
+   "mails_sent": 17
+  },
+  {
+   "sender": "deals@dealrush.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "digest@lists.dailygrind.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "hello@dailygrind.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "hello@dealcraze.example.org",
+   "mails_sent": 17
+  },
+  {
+   "sender": "hello@synergystoat.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "info@demodrake.example.org",
+   "mails_sent": 17
+  },
+  {
+   "sender": "newsletter@dailygrind.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "newsletter@dealcraze.example.net",
+   "mails_sent": 17
+  },
+  {
+   "sender": "no-reply@forkfetch.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "no-reply@mail.dealcraze.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "noreply@reelriver.example.com",
+   "mails_sent": 17
+  },
+  {
+   "sender": "offers@dealcraze.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "offers@dealrush.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "orders@forkfetch.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "orders@mail.swiftsparrow.example.net",
+   "mails_sent": 17
+  },
+  {
+   "sender": "outreach@mail.demodrake.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "promo@dealcraze.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "quincy.lombardi@example.com",
+   "mails_sent": 17
+  },
+  {
+   "sender": "receipts@forkfetch.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "reservations@roamnest.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "sales@dealcraze.example.com",
+   "mails_sent": 17
+  },
+  {
+   "sender": "security@reelriver.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "style@dealcraze.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "team@synergystoat.example.com",
+   "mails_sent": 17
+  },
+  {
+   "sender": "updates@news.dailyalmanac.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "updates@news.dailygrind.example",
+   "mails_sent": 17
+  },
+  {
+   "sender": "weekly@dailygrind.example.net",
+   "mails_sent": 17
+  },
+  {
+   "sender": "zora.vance@example.net",
+   "mails_sent": 17
+  },
+  {
+   "sender": "billing@forkfetch.example.com",
+   "mails_sent": 16
+  },
+  {
+   "sender": "brief@dailyharvest.example.org",
+   "mails_sent": 16
+  },
+  {
+   "sender": "brief@dailysatchel.example.org",
+   "mails_sent": 16
+  },
+  {
+   "sender": "digest@lists.dailyharvest.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "digest@lists.dailysatchel.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "events@synergystoat.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "hello@dailyharvest.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "hello@dailysatchel.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "hello@reelriver.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "hello@scaleshrike.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "info@synergystoat.example.org",
+   "mails_sent": 16
+  },
+  {
+   "sender": "newsletter@dailyharvest.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "newsletter@dailysatchel.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "newsletter@dealrush.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "no-reply@mail.dealrush.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "no-reply@synergystoat.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "orders@mail.forkfetch.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "outreach@mail.synergystoat.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "promo@dealrush.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "promo@wanderperch.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "receipts@snackshuttle.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "sales@dealrush.example.com",
+   "mails_sent": 16
+  },
+  {
+   "sender": "shipping-updates@forkfetch.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "style@dealrush.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "team@reelriver.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "updates@mail.reelriver.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "updates@news.dailyharvest.example",
+   "mails_sent": 16
+  },
+  {
+   "sender": "victor60@example.com",
+   "mails_sent": 16
+  },
+  {
+   "sender": "weekly@dailyharvest.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "weekly@dailysatchel.example.net",
+   "mails_sent": 16
+  },
+  {
+   "sender": "brief@dailychalkboard.example.org",
+   "mails_sent": 15
+  },
+  {
+   "sender": "deals@dealotter.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "digest@lists.dailychalkboard.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "events@brandbison.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "events@scaleshrike.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "hello@brandbison.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "hello@dailychalkboard.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "hello@dealrush.example.org",
+   "mails_sent": 15
+  },
+  {
+   "sender": "info@scaleshrike.example.org",
+   "mails_sent": 15
+  },
+  {
+   "sender": "news@modmeadow.example.net",
+   "mails_sent": 15
+  },
+  {
+   "sender": "newsletter@dailychalkboard.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "no-reply@brandbison.example.net",
+   "mails_sent": 15
+  },
+  {
+   "sender": "no-reply@chordpuddle.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "no-reply@mail.dealotter.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "no-reply@scaleshrike.example.net",
+   "mails_sent": 15
+  },
+  {
+   "sender": "no-reply@snackshuttle.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "noreply@chordpuddle.example.com",
+   "mails_sent": 15
+  },
+  {
+   "sender": "offers@dealotter.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "offers@wanderperch.example.com",
+   "mails_sent": 15
+  },
+  {
+   "sender": "orders@snackshuttle.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "outreach@mail.scaleshrike.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "promo@dealotter.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "sales@dealotter.example.com",
+   "mails_sent": 15
+  },
+  {
+   "sender": "security@chordpuddle.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "style@dealotter.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "support@reelriver.example.org",
+   "mails_sent": 15
+  },
+  {
+   "sender": "team@brandbison.example.com",
+   "mails_sent": 15
+  },
+  {
+   "sender": "team@scaleshrike.example.com",
+   "mails_sent": 15
+  },
+  {
+   "sender": "updates@news.dailysatchel.example",
+   "mails_sent": 15
+  },
+  {
+   "sender": "ada.quimby@example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "billing@snackshuttle.example.com",
+   "mails_sent": 14
+  },
+  {
+   "sender": "brief@dailytinker.example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "brief@weeklyledger.example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "deals@dealbasket.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "digest@lists.dailytinker.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "digest@lists.weeklyledger.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "events@clickcurlew.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@chordpuddle.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@clickcurlew.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@dailytinker.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@dealotter.example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@insightibex.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "hello@weeklyledger.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "info@brandbison.example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "info@clickcurlew.example.org",
+   "mails_sent": 14
+  },
+  {
+   "sender": "itinerary@wanderperch.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "newsletter@dailytinker.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "newsletter@dealotter.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "newsletter@weeklyledger.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "no-reply@clickcurlew.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "no-reply@wanderperch.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "offers@dealbasket.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "orders@mail.snackshuttle.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "outreach@mail.brandbison.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "outreach@mail.clickcurlew.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "promo@dealbasket.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "receipts@platterly.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "sales@dealbasket.example.com",
+   "mails_sent": 14
+  },
+  {
+   "sender": "shipping-updates@snackshuttle.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "team@chordpuddle.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "team@clickcurlew.example.com",
+   "mails_sent": 14
+  },
+  {
+   "sender": "updates@news.dailychalkboard.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "updates@news.dailytinker.example",
+   "mails_sent": 14
+  },
+  {
+   "sender": "weekly@dailychalkboard.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "weekly@dailytinker.example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "{f}quimby@example.net",
+   "mails_sent": 14
+  },
+  {
+   "sender": "amos.whitfield@example.net",
+   "mails_sent": 13
+  },
+  {
+   "sender": "brief@weeklyskillet.example.org",
+   "mails_sent": 13
+  },
+  {
+   "sender": "deals@dealmarket.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "digest@lists.weeklycircuit.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "digest@lists.weeklyskillet.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "events@insightibex.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "events@marketmink.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "hello@dealbasket.example.org",
+   "mails_sent": 13
+  },
+  {
+   "sender": "hello@marketmink.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "hello@weeklyskillet.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "imogen.merriweather@example.com",
+   "mails_sent": 13
+  },
+  {
+   "sender": "info@insightibex.example.org",
+   "mails_sent": 13
+  },
+  {
+   "sender": "newsletter@dealbasket.example.net",
+   "mails_sent": 13
+  },
+  {
+   "sender": "newsletter@weeklycircuit.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "newsletter@weeklyskillet.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "no-reply@insightibex.example.net",
+   "mails_sent": 13
+  },
+  {
+   "sender": "no-reply@mail.dealbasket.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "no-reply@platterly.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "no-reply@podqueue.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "noreply@podqueue.example.com",
+   "mails_sent": 13
+  },
+  {
+   "sender": "offers@dealmarket.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "orders@platterly.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "outreach@mail.insightibex.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "security@podqueue.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "shipping-updates@platterly.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "style@dealbasket.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "support@chordpuddle.example.org",
+   "mails_sent": 13
+  },
+  {
+   "sender": "team@insightibex.example.com",
+   "mails_sent": 13
+  },
+  {
+   "sender": "team@marketmink.example.com",
+   "mails_sent": 13
+  },
+  {
+   "sender": "updates@mail.chordpuddle.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "updates@news.weeklyledger.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "updates@news.weeklyskillet.example",
+   "mails_sent": 13
+  },
+  {
+   "sender": "weekly@weeklyledger.example.net",
+   "mails_sent": 13
+  },
+  {
+   "sender": "weekly@weeklyskillet.example.net",
+   "mails_sent": 13
+  },
+  {
+   "sender": "billing@platterly.example.com",
+   "mails_sent": 12
+  },
+  {
+   "sender": "billing@tapfare.example.com",
+   "mails_sent": 12
+  },
+  {
+   "sender": "brief@weeklycircuit.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "brief@weeklygazette.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "brief@weeklypaddock.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "celia15@example.com",
+   "mails_sent": 12
+  },
+  {
+   "sender": "digest@lists.weeklygazette.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "digest@lists.weeklypaddock.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "events@trendtapir.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@dealmarket.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@podqueue.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@trendtapir.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@weeklycircuit.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@weeklygazette.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "hello@weeklypaddock.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "info@marketmink.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "newsletter@dealmarket.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "newsletter@weeklygazette.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "newsletter@weeklypaddock.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "no-reply@grubgrove.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "no-reply@mail.dealmarket.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "no-reply@marketmink.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "no-reply@sketchloft.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "no-reply@tapfare.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "orders@grubgrove.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "orders@mail.platterly.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "orders@mail.tapfare.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "orders@tapfare.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "outreach@mail.marketmink.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "promo@dealmarket.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "receipts@grubgrove.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "receipts@tapfare.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "sales@dealmarket.example.com",
+   "mails_sent": 12
+  },
+  {
+   "sender": "shipping-updates@tapfare.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "style@dealmarket.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "support@podqueue.example.org",
+   "mails_sent": 12
+  },
+  {
+   "sender": "team@podqueue.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "team@trendtapir.example.com",
+   "mails_sent": 12
+  },
+  {
+   "sender": "updates@mail.podqueue.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "updates@news.weeklycircuit.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "updates@news.weeklypaddock.example",
+   "mails_sent": 12
+  },
+  {
+   "sender": "weekly@weeklycircuit.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "weekly@weeklygazette.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "weekly@weeklypaddock.example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "{f}xiang@example.net",
+   "mails_sent": 12
+  },
+  {
+   "sender": "brief@weeklydispatch.example.org",
+   "mails_sent": 11
+  },
+  {
+   "sender": "deals@mail.wanderperch.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "digest@lists.weeklydispatch.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "events@reachraven.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "hank.trell@example.org",
+   "mails_sent": 11
+  },
+  {
+   "sender": "hello@reachraven.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "hello@sketchloft.example.net",
+   "mails_sent": 11
+  },
+  {
+   "sender": "hello@weeklydispatch.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "info@trendtapir.example.org",
+   "mails_sent": 11
+  },
+  {
+   "sender": "newsletter@weeklydispatch.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "no-reply@trendtapir.example.net",
+   "mails_sent": 11
+  },
+  {
+   "sender": "noreply@sketchloft.example.com",
+   "mails_sent": 11
+  },
+  {
+   "sender": "outreach@mail.trendtapir.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "promo@cloudhopperair.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "reservations@wanderperch.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "security@sketchloft.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "team@reachraven.example.com",
+   "mails_sent": 11
+  },
+  {
+   "sender": "team@sketchloft.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "updates@mail.sketchloft.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "updates@news.weeklygazette.example",
+   "mails_sent": 11
+  },
+  {
+   "sender": "bram.vance@example.net",
+   "mails_sent": 10
+  },
+  {
+   "sender": "hello@vaultvine.example.net",
+   "mails_sent": 10
+  },
+  {
+   "sender": "info@reachraven.example.org",
+   "mails_sent": 10
+  },
+  {
+   "sender": "no-reply@meetmarsh.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "no-reply@reachraven.example.net",
+   "mails_sent": 10
+  },
+  {
+   "sender": "no-reply@vaultvine.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "noreply@meetmarsh.example.com",
+   "mails_sent": 10
+  },
+  {
+   "sender": "noreply@vaultvine.example.com",
+   "mails_sent": 10
+  },
+  {
+   "sender": "outreach@mail.reachraven.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "quincy.drummond@example.com",
+   "mails_sent": 10
+  },
+  {
+   "sender": "security@vaultvine.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "support@sketchloft.example.org",
+   "mails_sent": 10
+  },
+  {
+   "sender": "support@vaultvine.example.org",
+   "mails_sent": 10
+  },
+  {
+   "sender": "team@vaultvine.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "updates@mail.vaultvine.example",
+   "mails_sent": 10
+  },
+  {
+   "sender": "weekly@weeklydispatch.example.net",
+   "mails_sent": 10
+  },
+  {
+   "sender": "amos12@example.com",
+   "mails_sent": 9
+  },
+  {
+   "sender": "jonah.norwood@example.org",
+   "mails_sent": 9
+  },
+  {
+   "sender": "leland.umber@example.net",
+   "mails_sent": 9
+  },
+  {
+   "sender": "no-reply@cloudhopperair.example",
+   "mails_sent": 9
+  },
+  {
+   "sender": "offers@cloudhopperair.example.com",
+   "mails_sent": 9
+  },
+  {
+   "sender": "security@meetmarsh.example",
+   "mails_sent": 9
+  },
+  {
+   "sender": "team@meetmarsh.example",
+   "mails_sent": 9
+  },
+  {
+   "sender": "updates@news.weeklydispatch.example",
+   "mails_sent": 9
+  },
+  {
+   "sender": "{f}wetherby@example.net",
+   "mails_sent": 9
+  },
+  {
+   "sender": "hello@meetmarsh.example.net",
+   "mails_sent": 8
+  },
+  {
+   "sender": "itinerary@cloudhopperair.example.net",
+   "mails_sent": 8
+  },
+  {
+   "sender": "no-reply@taskthicket.example",
+   "mails_sent": 8
+  },
+  {
+   "sender": "noreply@taskthicket.example.com",
+   "mails_sent": 8
+  },
+  {
+   "sender": "support@meetmarsh.example.org",
+   "mails_sent": 8
+  },
+  {
+   "sender": "updates@mail.meetmarsh.example",
+   "mails_sent": 8
+  },
+  {
+   "sender": "deals@mail.cloudhopperair.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "no-reply@jetfern.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "offers@jetfern.example.com",
+   "mails_sent": 7
+  },
+  {
+   "sender": "promo@jetfern.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "reservations@cloudhopperair.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "security@taskthicket.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "team@taskthicket.example",
+   "mails_sent": 7
+  },
+  {
+   "sender": "billing@grubgrove.example.com",
+   "mails_sent": 6
+  },
+  {
+   "sender": "deals@mail.jetfern.example",
+   "mails_sent": 6
+  },
+  {
+   "sender": "hello@taskthicket.example.net",
+   "mails_sent": 6
+  },
+  {
+   "sender": "itinerary@innsleigh.example.net",
+   "mails_sent": 6
+  },
+  {
+   "sender": "itinerary@jetfern.example.net",
+   "mails_sent": 6
+  },
+  {
+   "sender": "no-reply@innsleigh.example",
+   "mails_sent": 6
+  },
+  {
+   "sender": "offers@innsleigh.example.com",
+   "mails_sent": 6
+  },
+  {
+   "sender": "promo@innsleigh.example",
+   "mails_sent": 6
+  },
+  {
+   "sender": "reservations@jetfern.example",
+   "mails_sent": 6
+  },
+  {
+   "sender": "shipping-updates@grubgrove.example",
+   "mails_sent": 6
+  },
+  {
+   "sender": "billing@boxbadger.example.com",
+   "mails_sent": 5
+  },
+  {
+   "sender": "billing@crateloon.example.com",
+   "mails_sent": 5
+  },
+  {
+   "sender": "deals@mail.innsleigh.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "no-reply@boxbadger.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "no-reply@crateloon.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "no-reply@glowalmanac.example.com",
+   "mails_sent": 5
+  },
+  {
+   "sender": "no-reply@railwren.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "noreply@glowalmanac.example.net",
+   "mails_sent": 5
+  },
+  {
+   "sender": "offers@railwren.example.com",
+   "mails_sent": 5
+  },
+  {
+   "sender": "orders@boxbadger.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "orders@crateloon.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "orders@mail.boxbadger.example.net",
+   "mails_sent": 5
+  },
+  {
+   "sender": "orders@mail.crateloon.example.net",
+   "mails_sent": 5
+  },
+  {
+   "sender": "orders@mail.grubgrove.example.net",
+   "mails_sent": 5
+  },
+  {
+   "sender": "promo@railwren.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "receipts@boxbadger.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "receipts@crateloon.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "reservations@innsleigh.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "shipping-updates@boxbadger.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "shipping-updates@crateloon.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "verify@glowalmanac.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "welcome@glowalmanac.example",
+   "mails_sent": 5
+  },
+  {
+   "sender": "billing@mercantmoss.example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "billing@pedalpost.example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "billing@shopsprout.example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "confirm@glowalmanac.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "confirm@morningsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "desmond14@example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "events@glowalmanac.example.org",
+   "mails_sent": 4
+  },
+  {
+   "sender": "events@morningsprout.example.org",
+   "mails_sent": 4
+  },
+  {
+   "sender": "farid.norwood@example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "hello@mail.glowalmanac.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "hello@mail.morningsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "jonah.jasper@example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@bramblechalkboard.example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@mercantmoss.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@morningsprout.example.com",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@pedalpost.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@shopburrow.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "no-reply@shopsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "noreply@morningsprout.example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@mail.mercantmoss.example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@mail.pedalpost.example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@mail.shopsprout.example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@mercantmoss.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@pedalpost.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@shopburrow.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "orders@shopsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "receipts@mercantmoss.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "receipts@pedalpost.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "receipts@shopburrow.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "receipts@shopsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "shipping-updates@mercantmoss.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "shipping-updates@pedalpost.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "shipping-updates@shopsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "tilda.eastwick@example.org",
+   "mails_sent": 4
+  },
+  {
+   "sender": "verify@bramblechalkboard.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "verify@morningsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "welcome@bramblechalkboard.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "welcome@morningsprout.example",
+   "mails_sent": 4
+  },
+  {
+   "sender": "{f}lombardi@example.net",
+   "mails_sent": 4
+  },
+  {
+   "sender": "billing@shopburrow.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "billing@shopcraze.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "billing@shophaus.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "billing@shopotter.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "billing@shoprush.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "celia.quimby@example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "confirm@bramblechalkboard.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "confirm@briefgrind.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "confirm@mapleoutfitters.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "confirm@plainsupply.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "confirm@velvetdispatch.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "deb.abernathy@example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "eamon67@example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "events@bramblechalkboard.example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "events@briefgrind.example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "events@mapleoutfitters.example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "events@plainsupply.example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "events@velvetdispatch.example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hank.raman@example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "harriet.umber@example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hello@mail.bramblechalkboard.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hello@mail.briefgrind.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hello@mail.mapleoutfitters.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hello@mail.plainsupply.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "hello@mail.velvetdispatch.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "imogen51@example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "itinerary@railwren.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@briefgrind.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@mapleoutfitters.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@plainsupply.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@shopbasket.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@shopcraze.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@shophaus.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@shopotter.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@shoprush.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "no-reply@velvetdispatch.example.com",
+   "mails_sent": 3
+  },
+  {
+   "sender": "noreply@bramblechalkboard.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "noreply@briefgrind.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "noreply@mapleoutfitters.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "noreply@plainsupply.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "noreply@velvetdispatch.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@mail.shopburrow.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@mail.shopcraze.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@mail.shophaus.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@mail.shopotter.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@mail.shoprush.example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@shopbasket.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@shopcraze.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@shophaus.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@shopotter.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "orders@shoprush.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "quincy.merriweather@example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "receipts@shopbasket.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "receipts@shopcraze.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "receipts@shophaus.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "receipts@shopotter.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "receipts@shoprush.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shopbasket.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shopburrow.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shopcraze.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shophaus.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shopotter.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "shipping-updates@shoprush.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "verify@briefgrind.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "verify@cloveralmanac.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "verify@mapleoutfitters.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "verify@plainsupply.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "verify@velvetdispatch.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "welcome@briefgrind.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "welcome@mapleoutfitters.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "welcome@plainsupply.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "welcome@velvetdispatch.example",
+   "mails_sent": 3
+  },
+  {
+   "sender": "zora.dunmore@example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "zora.xiang@example.org",
+   "mails_sent": 3
+  },
+  {
+   "sender": "{f}zell@example.net",
+   "mails_sent": 3
+  },
+  {
+   "sender": "amos.barretto@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@dealsprout.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopbasket.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopgoods.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopmarket.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopoutfitters.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopsupply.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "billing@shopvault.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "carys.umber@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "celia.calloway@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "celia.umber@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@backyardburrow.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@birchsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@bramblemarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@briefvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@cedarbasket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@cloveralmanac.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@dappervault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@glowskillet.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@stitchgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@tinkerrush.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "confirm@tumblevault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "dario.eastwick@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "deb.yarrow@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@backyardburrow.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@birchsprout.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@bramblemarket.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@briefvault.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@cedarbasket.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@cloveralmanac.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@dappervault.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@glowskillet.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@stitchgoods.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@tinkerrush.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "events@tumblevault.example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "felix55@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hank.rosales@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "harriet.norwood@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.backyardburrow.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.birchsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.bramblemarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.briefvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.cedarbasket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.cloveralmanac.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.dappervault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.glowskillet.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.stitchgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.tinkerrush.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hello@mail.tumblevault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "hollis.abernathy@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "ivo70@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "jules.fairweather@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "jules88@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "maeve.vance@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "marcus.xiang@example.org",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@backyardburrow.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@birchsprout.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@bramblemarket.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@briefvault.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@cedarbasket.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@cloveralmanac.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@dappervault.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@dealsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@glowskillet.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@opensupply.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@shopgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@shopmarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@shopoutfitters.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@shopsupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@shopvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@stitchgoods.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@tinkerrush.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "no-reply@tumblevault.example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@backyardburrow.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@birchsprout.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@bramblemarket.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@briefvault.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@cedarbasket.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@cloveralmanac.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@dappervault.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@glowskillet.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@stitchgoods.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@tinkerrush.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "noreply@tumblevault.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@dealsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.dealsprout.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopbasket.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopgoods.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopmarket.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopoutfitters.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopsupply.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@mail.shopvault.example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@shopgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@shopmarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@shopoutfitters.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@shopsupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "orders@shopvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "petra.zell@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "petra50@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@dealsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@shopgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@shopmarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@shopoutfitters.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@shopsupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "receipts@shopvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "renata.thistlewood@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "sana.wetherby@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@dealsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@shopgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@shopmarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@shopoutfitters.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@shopsupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "shipping-updates@shopvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "silas59@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "tilda.fairweather@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "tobias.hollowell@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@backyardburrow.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@birchsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@bramblemarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@briefvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@cedarbasket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@dappervault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@glowskillet.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@opensupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@stitchgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@tinkerrush.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "verify@tumblevault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "victor.calloway@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "victor62@example.com",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@backyardburrow.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@birchsprout.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@bramblemarket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@briefvault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@cedarbasket.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@cloveralmanac.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@dappervault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@glowskillet.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@opensupply.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@stitchgoods.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@tinkerrush.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "welcome@tumblevault.example",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}barretto@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}cardenas@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}drummond@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}hartley@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}norwood@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "{f}petrov@example.net",
+   "mails_sent": 2
+  },
+  {
+   "sender": "amos41@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealbasket.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealburrow.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealcraze.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealgoods.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealhaus.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealmarket.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealotter.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "billing@dealrush.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "brendan.ashdown@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "brendan.lindqvist@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "carys.barretto@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@backyardledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@bargainburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@bargaindispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@bargainsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@birchchalkboard.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@birchsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@bramblesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@clovermarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@cloverrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@glowhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@glowsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@hemlinebasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@hemlineharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@lakestonecu.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@maplepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@maplevault.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@opencraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@opengoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@opensupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@plainskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@prairiehaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@prairiepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@prairiesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@saffronhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@shopdispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@shopsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@stitchcircuit.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@stitchharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@stitchledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@stitchoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@streamwater.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@sundaycraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@sundaypaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@tinkerotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@tumbleoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@velvetoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@velvetsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@webinarbarn.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "confirm@willowskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "desmond72@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "eamon.norwood@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "elke.lindqvist@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "elke.quimby@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@backyardledger.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@bargainburrow.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@bargaindispatch.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@bargainsprout.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@birchchalkboard.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@birchsupply.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@bramblesprout.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@clovermarket.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@cloverrush.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@glowhaus.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@glowsprout.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@hemlinebasket.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@hemlineharvest.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@lakestonecu.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@maplepaddock.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@maplevault.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@opencraze.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@opengoods.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@opensupply.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@plainskillet.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@prairiehaus.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@prairiepaddock.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@prairiesprout.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@saffronhaus.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@shopdispatch.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@shopsupply.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@stitchcircuit.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@stitchharvest.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@stitchledger.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@stitchoutfitters.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@streamwater.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@sundaycraze.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@sundaypaddock.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@tinkerotter.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@tumbleoutfitters.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@velvetoutfitters.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@velvetsprout.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@webinarbarn.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "events@willowskillet.example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "felix.rosales@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "felix39@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "greta.quill@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.backyardledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.bargainburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.bargaindispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.bargainsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.birchchalkboard.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.birchsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.bramblesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.clovermarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.cloverrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.glowhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.glowsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.hemlinebasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.hemlineharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.lakestonecu.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.maplepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.maplevault.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.opencraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.opengoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.opensupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.plainskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.prairiehaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.prairiepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.prairiesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.saffronhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.shopdispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.shopsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.stitchcircuit.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.stitchharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.stitchledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.stitchoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.streamwater.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.sundaycraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.sundaypaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.tinkerotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.tumbleoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.velvetoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.velvetsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.webinarbarn.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hello@mail.willowskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hollis.quill@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "hollis.xiang@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "imogen.drummond@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "ines.xiang@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "ivo.lombardi@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "ivo38@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "jonah.barretto@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "jules.abernathy@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "leland.cardenas@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "maeve.wetherby@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "marcus.vance@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@backyardledger.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@bargainburrow.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@bargaindispatch.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@bargainsprout.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@birchchalkboard.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@birchsupply.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@bramblesprout.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@clovermarket.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@cloverrush.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealbasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealcraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealgoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealmarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@dealsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@glowhaus.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@glowsprout.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@hemlinebasket.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@hemlineharvest.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@lakestonecu.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@maplepaddock.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@maplevault.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@opencraze.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@opengoods.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@plainskillet.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@prairiehaus.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@prairiepaddock.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@prairiesprout.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@saffronhaus.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@shopdispatch.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@shopsupply.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@stitchcircuit.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@stitchharvest.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@stitchledger.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@stitchoutfitters.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@streamwater.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@sundaycraze.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@sundaypaddock.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@tinkerotter.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@tumbleoutfitters.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@velvetoutfitters.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@velvetsprout.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@webinarbarn.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "no-reply@willowskillet.example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@backyardledger.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@bargainburrow.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@bargaindispatch.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@bargainsprout.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@birchchalkboard.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@birchsupply.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@bramblesprout.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@clovermarket.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@cloverrush.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@glowhaus.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@glowsprout.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@hemlinebasket.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@hemlineharvest.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@lakestonecu.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@maplepaddock.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@maplevault.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@opencraze.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@opengoods.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@opensupply.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@plainskillet.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@prairiehaus.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@prairiepaddock.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@prairiesprout.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@saffronhaus.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@shopdispatch.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@shopsupply.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@stitchcircuit.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@stitchharvest.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@stitchledger.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@stitchoutfitters.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@streamwater.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@sundaycraze.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@sundaypaddock.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@tinkerotter.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@tumbleoutfitters.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@velvetoutfitters.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@velvetsprout.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@webinarbarn.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "noreply@willowskillet.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "oksana.birchall@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "oksana.cardenas@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealbasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealcraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealgoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealmarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@dealsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealbasket.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealburrow.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealcraze.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealgoods.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealhaus.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealmarket.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealotter.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "orders@mail.dealrush.example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "priya48@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "quincy82@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealbasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealcraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealgoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealmarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "receipts@dealsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "renata.dunmore@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "ruben.petrov@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "ruben61@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealbasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealcraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealgoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealmarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "shipping-updates@dealsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "silas.lombardi@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "silas.merriweather@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "silas89@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "tobias.thistlewood@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "tobias34@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@backyardledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@bargainburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@bargaindispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@bargainsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@birchchalkboard.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@birchotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@birchsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@bramblesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@clovermarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@cloverrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@glowhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@glowsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@hemlinebasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@hemlineharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@lakestonecu.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@maplepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@maplevault.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@opencraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@opengoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@plainskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@prairiehaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@prairiepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@prairiesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@saffronhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@shopdispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@shopsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@stitchcircuit.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@stitchharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@stitchledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@stitchoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@streamwater.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@sundaycraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@sundaypaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@tinkerotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@tumbleoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@velvetoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@velvetsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@webinarbarn.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "verify@willowskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "victor.jasper@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@backyardledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@bargainburrow.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@bargaindispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@bargainsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@birchchalkboard.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@birchsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@bramblesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@clovermarket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@cloverrush.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@glowhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@glowsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@hemlinebasket.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@hemlineharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@lakestonecu.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@maplepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@maplevault.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@opencraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@opengoods.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@plainskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@prairiehaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@prairiepaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@prairiesprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@saffronhaus.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@shopdispatch.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@shopsupply.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@stitchcircuit.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@stitchharvest.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@stitchledger.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@stitchoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@streamwater.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@sundaycraze.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@sundaypaddock.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@tinkerotter.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@tumbleoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@velvetoutfitters.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@velvetsprout.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@webinarbarn.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "welcome@willowskillet.example",
+   "mails_sent": 1
+  },
+  {
+   "sender": "willa.thistlewood@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "willa73@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "zora.calloway@example.org",
+   "mails_sent": 1
+  },
+  {
+   "sender": "zora.okafor@example.com",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}ashdown@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}dunmore@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}kestrel@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}oyelaran@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}pemberton@example.net",
+   "mails_sent": 1
+  },
+  {
+   "sender": "{f}yarrow@example.net",
+   "mails_sent": 1
+  }
+ ]
 }
