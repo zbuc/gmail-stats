@@ -211,6 +211,17 @@ tr.hidden-row td.act { opacity: 1; }
   margin: 0 0 1rem;
   font-size: 0.9rem;
 }
+.banner-command {
+  display: block;
+  margin-top: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg) 8%, var(--card));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  user-select: all;
+  -webkit-user-select: all;
+}
 #generated-at.stale { opacity: 0.45; }
 
 .cards { display: flex; gap: 0.75rem; flex-wrap: wrap; margin: 1rem 0; }

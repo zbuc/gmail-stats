@@ -16,6 +16,8 @@ Scenarios:
   owns_true   owned run: Log renders ring-buffer lines, Cancel POSTs w/ CSRF
   auth_good   accounts.google.com auth_url renders a safe link
   auth_evil   any other auth_url renders as inert text (no link)
+  mixed_unrepaired  mixed_sources: banner names the backfill command + count
+  mixed_repaired    repaired database: no banner
 
 Run:  python3 tests/frontend/harness.py
 Requires Google Chrome (path override: CHROME env var). Exits non-zero on any
@@ -68,6 +70,7 @@ def base_status(**overrides):
         "last_run": None,
         "owns_active_run": False,
         "mixed_sources": False,
+        "unrepaired_count": 0,
         "rate_per_sec": None,
         "eta_seconds": None,
         "csrf_token": TOKEN,
@@ -141,6 +144,12 @@ SCENARIOS = {
             ingest_lock_held=True,
             owns_active_run=True,
         ),
+    },
+    "mixed_unrepaired": {
+        "status": base_status(mixed_sources=True, unrepaired_count=1234),
+    },
+    "mixed_repaired": {
+        "status": base_status(),
     },
 }
 
@@ -349,6 +358,25 @@ def main():
                 "hostile URL shown as inert text",
                 failures,
             )
+        elif name == "mixed_unrepaired":
+            check(not results["bannerHidden"], "mixed banner visible when unrepaired", failures)
+            check(
+                results["command"] == "cargo run -- scan --backfill-message-ids",
+                f"banner names the exact backfill command ({results['command']!r})",
+                failures,
+            )
+            check(
+                "1,234" in results["text"] or "1234" in results["text"],
+                "banner mentions the unrepaired count",
+                failures,
+            )
+            check(
+                "duplicate" in results["text"].lower(),
+                "banner explains cross-source duplicates",
+                failures,
+            )
+        elif name == "mixed_repaired":
+            check(results["bannerHidden"], "mixed banner absent when repaired", failures)
 
     print()
     if failures:

@@ -154,6 +154,7 @@ function shouldOnboard() {
 function sourceLabel(source) {
   if (source === "mbox") return "Takeout import";
   if (source === "gmail_api") return "Gmail scan";
+  if (source === "backfill") return "Message-ID backfill";
   return source ? String(source) : "Ingestion";
 }
 
@@ -607,10 +608,28 @@ function renderIngest() {
   }
   renderPill();
   renderPanel();
-  document
-    .getElementById("mixed-banner")
-    .classList.toggle("hidden", !(ingest.status && ingest.status.mixed_sources === true));
+  renderMixedBanner();
   reconcileMainView();
+}
+
+// Cross-source repair caution: shown only while the database mixes scan and
+// import keyspaces AND some scanned messages still lack their Message-ID
+// (mixed_sources from /api/status). Names the exact repair command; once
+// `scan --backfill-message-ids` has run, mixed_sources turns false and the
+// banner disappears. All content via textContent.
+function renderMixedBanner() {
+  const status = ingest.status;
+  const mixed = Boolean(status && status.mixed_sources === true);
+  document.getElementById("mixed-banner").classList.toggle("hidden", !mixed);
+  if (!mixed) return;
+  const n = Number(status.unrepaired_count) || 0;
+  const counted = n > 0 ? `${n.toLocaleString()} scanned message(s)` : "some scanned messages";
+  document.getElementById("mixed-text").textContent =
+    `Counts may include cross-source duplicates: this database mixes scan and ` +
+    `import, and ${counted} have no recorded Message-ID yet. Repair once ` +
+    `(idempotent, resumable) with:`;
+  document.getElementById("mixed-command").textContent =
+    "cargo run -- scan --backfill-message-ids";
 }
 
 function scheduleStatusPoll(delayMs) {
