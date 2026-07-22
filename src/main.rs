@@ -2,14 +2,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use futures::{stream, TryStreamExt};
 use google_gmail1::api::Message;
 use google_gmail1::{api::Scope, hyper_rustls, hyper_util, yup_oauth2, Gmail};
 use lazy_static::lazy_static;
 use regex::Regex;
-use sqlx::sqlite::{
-    SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
-};
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Connection, Pool, Row, Sqlite, SqliteConnection, SqliteExecutor, Transaction};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task;
@@ -18,12 +17,15 @@ use tokio::time::{Interval, MissedTickBehavior};
 type GmailHub =
     Gmail<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
 
-/// How many messages_get calls may be in flight at once.
-const FETCH_CONCURRENCY: usize = 8;
-/// Minimum spacing between Gmail API calls. Gmail's per-user quota is
-/// ~250 quota units/sec and messages.get costs 5 units, so ~50 requests/sec
-/// is the ceiling; 25ms spacing (~40 req/sec) stays comfortably under it.
-const RATE_LIMIT_INTERVAL: Duration = Duration::from_millis(25);
+/// Default for how many messages_get calls may be in flight at once.
+/// Override at runtime with the GMAIL_STATS_FETCH_CONCURRENCY env var.
+const DEFAULT_FETCH_CONCURRENCY: usize = 8;
+/// Default minimum spacing between Gmail API calls, in milliseconds. Gmail's
+/// per-user quota is ~250 quota units/sec and messages.get costs 5 units, so
+/// ~50 requests/sec is the ceiling; 25ms spacing (~40 req/sec) stays
+/// comfortably under it. Override at runtime with the GMAIL_STATS_RATE_LIMIT_MS
+/// env var (useful for projects with a lower per-user quota).
+const DEFAULT_RATE_LIMIT_MS: u64 = 25;
 /// How many times to retry a single message fetch on a rate-limit response.
 const MAX_FETCH_RETRIES: u32 = 5;
 
@@ -41,7 +43,14 @@ lazy_static! {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // TODO: add DB schema and migrations
+    let fetch_concurrency: usize =
+        env_or("GMAIL_STATS_FETCH_CONCURRENCY", DEFAULT_FETCH_CONCURRENCY)?;
+    anyhow::ensure!(
+        fetch_concurrency >= 1,
+        "GMAIL_STATS_FETCH_CONCURRENCY must be at least 1"
+    );
+    let rate_limit_ms: u64 = env_or("GMAIL_STATS_RATE_LIMIT_MS", DEFAULT_RATE_LIMIT_MS)?;
+
     let options = SqliteConnectOptions::from_str("sqlite://./stats.db")?
         // WAL mode allows the seen-mail reads to proceed concurrently with the
         // single writer task's commits.
@@ -55,17 +64,18 @@ async fn main() -> anyhow::Result<()> {
     // through the single writer task below, which eliminates writer-vs-writer
     // deadlocks entirely.
     let pool = SqlitePoolOptions::new()
-        .max_connections(FETCH_CONCURRENCY as u32)
+        .max_connections(fetch_concurrency as u32)
         .connect_with(options.clone())
         .await?;
 
     // The writer task owns the only connection that ever writes.
-    let writer_conn = SqliteConnection::connect_with(&options).await?;
+    let mut writer_conn = SqliteConnection::connect_with(&options).await?;
+    init_schema(&mut writer_conn).await?;
     let (mut write_tx, write_rx) = mpsc::channel::<SeenMail>(100);
     let mut writer_handle = task::spawn(db_writer(writer_conn, write_rx));
 
     // Simple client-side rate limiter: each API call waits for the next tick.
-    let mut interval = tokio::time::interval(RATE_LIMIT_INTERVAL);
+    let mut interval = tokio::time::interval(Duration::from_millis(rate_limit_ms));
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let rate_limiter = Arc::new(Mutex::new(interval));
 
@@ -101,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     // Some kind of exponential backpressure on a worker would be nicer
     let mut retries = 0;
     loop {
-        match work(&pool, &hub, &write_tx, &rate_limiter).await {
+        match work(&pool, &hub, &write_tx, &rate_limiter, fetch_concurrency).await {
             Ok(()) => break,
             Err(e) => {
                 retries += 1;
@@ -112,20 +122,23 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // If the writer task died, its channel is closed and every future
-        // send would fail, so no retry could ever succeed. Surface the
-        // root-cause DB error and spawn a fresh writer so the retry has a
-        // chance of working (e.g. a transient "database is locked").
-        if writer_handle.is_finished() {
-            match writer_handle.await? {
-                Ok(()) => println!("DB writer task exited early; restarting it"),
-                Err(e) => println!("DB writer task failed, restarting it: {:?}", e),
-            }
-            let writer_conn = SqliteConnection::connect_with(&options).await?;
-            let (tx, rx) = mpsc::channel::<SeenMail>(100);
-            write_tx = tx;
-            writer_handle = task::spawn(db_writer(writer_conn, rx));
+        // Quiesce the writer before retrying: close the channel and wait for
+        // the writer to drain and commit every queued result. Without this
+        // barrier the retry's seen-mail checks race the writer's backlog —
+        // a message that is queued but not yet committed reads as unseen and
+        // gets fetched, sent, and counted a second time. Awaiting the writer
+        // here guarantees the retry observes every prior result. This also
+        // covers the case where the writer task itself died (e.g. a transient
+        // "database is locked"): surface its error and spawn a fresh writer
+        // so the retry has a chance of working.
+        drop(write_tx);
+        if let Err(e) = writer_handle.await? {
+            println!("DB writer task failed, restarting it: {:?}", e);
         }
+        let writer_conn = SqliteConnection::connect_with(&options).await?;
+        let (tx, rx) = mpsc::channel::<SeenMail>(100);
+        write_tx = tx;
+        writer_handle = task::spawn(db_writer(writer_conn, rx));
     }
 
     // Close the channel so the writer task drains its queue and exits, then
@@ -136,16 +149,64 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read a value from an environment variable, falling back to a default when
+/// the variable is unset and failing loudly when it is set but unparseable.
+fn env_or<T: FromStr>(name: &str, default: T) -> anyhow::Result<T>
+where
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    match std::env::var(name) {
+        Ok(value) => value
+            .parse()
+            .with_context(|| format!("invalid {} value {:?}", name, value)),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(e) => Err(anyhow::Error::from(e).context(format!("reading {}", name))),
+    }
+}
+
+/// Create the tables if they don't exist yet and enforce uniqueness of
+/// seen_mails.mail_id so that replaying a message (e.g. after a mid-run retry)
+/// is idempotent instead of double-counting. Pre-existing duplicate rows from
+/// earlier versions are collapsed before the unique index is created.
+async fn init_schema(conn: &mut SqliteConnection) -> anyhow::Result<()> {
+    sqlx::query("CREATE TABLE IF NOT EXISTS seen_mails (mail_id string)")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query("CREATE TABLE IF NOT EXISTS senders (sender string, mails_sent int)")
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "DELETE FROM seen_mails WHERE rowid NOT IN \
+         (SELECT MIN(rowid) FROM seen_mails GROUP BY mail_id)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS seen_mails_mail_id_unique ON seen_mails (mail_id)",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 /// The single DB writer: receives fetched results over the channel and commits
 /// them one transaction at a time on its own dedicated connection.
+///
+/// The insert-and-count pair is idempotent per message id: the sender counter
+/// is only incremented when the INSERT OR IGNORE actually inserts the row, so
+/// a message that slips through the read-side seen check twice (its first
+/// result still queued and uncommitted when it is re-listed) is still counted
+/// exactly once.
 async fn db_writer(
     mut conn: SqliteConnection,
     mut rx: mpsc::Receiver<SeenMail>,
 ) -> anyhow::Result<()> {
     while let Some(mail) = rx.recv().await {
         let mut tx = conn.begin().await?;
-        mark_seen(&mail.message_id, &mut *tx).await?;
-        increment_sender_mails(&mail.sender, &mut tx).await?;
+        let newly_seen = mark_seen(&mail.message_id, &mut *tx).await?;
+        if newly_seen {
+            increment_sender_mails(&mail.sender, &mut tx).await?;
+        }
         tx.commit().await?;
     }
     Ok(())
@@ -156,6 +217,7 @@ async fn work(
     hub: &GmailHub,
     write_tx: &mpsc::Sender<SeenMail>,
     rate_limiter: &Arc<Mutex<Interval>>,
+    fetch_concurrency: usize,
 ) -> anyhow::Result<()> {
     // Fetch 500 messages at a time...
     let result = hub
@@ -174,6 +236,7 @@ async fn work(
         hub,
         write_tx,
         rate_limiter,
+        fetch_concurrency,
     )
     .await?;
 
@@ -194,6 +257,7 @@ async fn work(
             hub,
             write_tx,
             rate_limiter,
+            fetch_concurrency,
         )
         .await?;
     }
@@ -207,11 +271,12 @@ async fn parse_messages(
     hub: &GmailHub,
     write_tx: &mpsc::Sender<SeenMail>,
     rate_limiter: &Arc<Mutex<Interval>>,
+    fetch_concurrency: usize,
 ) -> anyhow::Result<()> {
     // Fetch each individual message concurrently (bounded), then hand the
     // result to the writer task to increment the counter for the sender.
     stream::iter(messages.into_iter().map(Ok::<_, anyhow::Error>))
-        .try_for_each_concurrent(FETCH_CONCURRENCY, |message_meta| {
+        .try_for_each_concurrent(fetch_concurrency, |message_meta| {
             let hub = hub.clone();
             let write_tx = write_tx.clone();
             let rate_limiter = rate_limiter.clone();
@@ -319,12 +384,14 @@ async fn seen_mail(message_id: &str, executor: impl SqliteExecutor<'_>) -> anyho
     Ok(false)
 }
 
-async fn mark_seen(message_id: &str, executor: impl SqliteExecutor<'_>) -> anyhow::Result<()> {
-    sqlx::query("INSERT INTO seen_mails (mail_id) VALUES (?)")
+/// Record a message id as seen. Returns whether the id was newly inserted;
+/// false means it was already present and must not be counted again.
+async fn mark_seen(message_id: &str, executor: impl SqliteExecutor<'_>) -> anyhow::Result<bool> {
+    let result = sqlx::query("INSERT OR IGNORE INTO seen_mails (mail_id) VALUES (?)")
         .bind(message_id)
         .execute(executor)
         .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
 async fn increment_sender_mails(
