@@ -1,6 +1,8 @@
 # gmail-stats
 Generate stats on your GMail inbox and store in a SQLite database
 
+**[Live demo](https://zbuc.github.io/gmail-stats/)** — a static demo of the web viewer with synthetic data for a fictional account (no real inbox involved).
+
 # What?
 My GMail inbox was a mess and there's no easy built-in way to view things like who the most frequent senders of mail are.
 

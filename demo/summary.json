@@ -1,0 +1,21 @@
+{
+  "total_messages": 2128,
+  "generated_at_unix": 1784678400,
+  "senders": [
+    { "sender": "newsletter@deals.shopping.example", "mails_sent": 412 },
+    { "sender": "notifications@social.example", "mails_sent": 388 },
+    { "sender": "no-reply@updates.example.com", "mails_sent": 265 },
+    { "sender": "alerts@bank.example", "mails_sent": 198 },
+    { "sender": "digest@news.example.org", "mails_sent": 187 },
+    { "sender": "team@project.example.net", "mails_sent": 154 },
+    { "sender": "receipts@store.example", "mails_sent": 112 },
+    { "sender": "support@service.example.com", "mails_sent": 96 },
+    { "sender": "alice@example.org", "mails_sent": 84 },
+    { "sender": "bob@example.net", "mails_sent": 61 },
+    { "sender": "promo@travel.example", "mails_sent": 57 },
+    { "sender": "security@accounts.example", "mails_sent": 43 },
+    { "sender": "calendar@invites.example", "mails_sent": 31 },
+    { "sender": "carol@example.com", "mails_sent": 26 },
+    { "sender": "hello@startup.example", "mails_sent": 14 }
+  ]
+}
