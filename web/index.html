@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gmail-stats</title>
+<!-- CSS and JS live in separate same-origin files (served at /app.css and
+     /app.js) rather than inline: the server's CSP is `default-src 'self'`,
+     which allows same-origin URLs but refuses inline style/script blocks. -->
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <h1>gmail-stats <span>· local viewer</span></h1>
+
+  <section id="loading">
+    <p class="muted">Loading&hellip;</p>
+  </section>
+
+  <section id="setup" class="notice hidden">
+    <h2>No stats database found</h2>
+    <p>The viewer reads <code>./stats.db</code> from the directory it was started in,
+       but the database (or its tables) doesn't exist yet.</p>
+    <p>Create the tables, then run the scanner from the repo root:</p>
+    <pre>$ sqlite3 stats.db
+sqlite&gt; CREATE TABLE seen_mails (mail_id string);
+sqlite&gt; CREATE TABLE senders (sender string, mails_sent int);
+sqlite&gt; .quit
+$ cargo run</pre>
+    <p>When the scan finishes (or while it runs), come back here.</p>
+    <button id="retry-setup" type="button">Retry</button>
+  </section>
+
+  <section id="error" class="notice hidden">
+    <h2>Something went wrong</h2>
+    <p id="error-message"></p>
+    <button id="retry-error" type="button">Retry</button>
+  </section>
+
+  <section id="stats" class="hidden">
+    <div class="tiles">
+      <div class="tile">
+        <div class="label">Total messages</div>
+        <div class="value" id="total-messages"></div>
+      </div>
+      <div class="tile">
+        <div class="label">Distinct senders</div>
+        <div class="value" id="distinct-senders"></div>
+      </div>
+      <div class="tile">
+        <div class="label">Top sender</div>
+        <div class="value small" id="top-sender"></div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Sender</th><th class="num">Messages</th></tr>
+      </thead>
+      <tbody id="sender-rows"></tbody>
+    </table>
+    <p class="muted" id="generated-at"></p>
+  </section>
+</main>
+</body>
+</html>
