@@ -20,7 +20,12 @@ use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
+// CSS/JS are separate same-origin assets, not inline blocks: under the
+// `default-src 'self'` CSP below, `'self'` only allowlists same-origin URLs —
+// inline <style>/<script> would be refused by the browser.
 const INDEX_HTML: &str = include_str!("../../web/index.html");
+const APP_CSS: &str = include_str!("../../web/app.css");
+const APP_JS: &str = include_str!("../../web/app.js");
 const DEFAULT_PORT: u16 = 7878;
 
 #[tokio::main]
@@ -49,6 +54,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/app.css", get(app_css))
+        .route("/app.js", get(app_js))
         .route("/api/summary", get(summary))
         .fallback(not_found)
         .layer(middleware::from_fn(host_guard_and_security_headers))
@@ -95,6 +102,17 @@ async fn host_guard_and_security_headers(req: Request, next: Next) -> Response {
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+async fn app_css() -> ([(header::HeaderName, &'static str); 1], &'static str) {
+    ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
+}
+
+async fn app_js() -> ([(header::HeaderName, &'static str); 1], &'static str) {
+    (
+        [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+        APP_JS,
+    )
 }
 
 async fn not_found() -> StatusCode {
