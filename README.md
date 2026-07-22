@@ -24,18 +24,30 @@ As well as allowing the `redirect_uri` of `http://localhost`.
 
 After setting up your OAuth credentials, download the client secret file and save it as `credentials.json`.
 
-Next you'll need to set up the local database tables, as I haven't added SQL migrations yet:
-
-```console
-$ sqlite3 stats.db
-sqlite> CREATE TABLE seen_mails (mail_id string);
-sqlite> CREATE TABLE senders (sender string, mails_sent int);
-```
+The application creates the local database tables (and a unique index on
+`seen_mails.mail_id`, which keeps retries from double-counting messages)
+automatically on startup, so no manual schema setup is needed.
 
 Finally, run the application:
 
 ```console
 $ cargo run
+```
+
+## Configuration
+
+Two optional environment variables tune the Gmail API request rate for your
+Google Cloud project's per-user quota:
+
+* `GMAIL_STATS_FETCH_CONCURRENCY` — how many `messages.get` calls may be in
+  flight at once (default: 8, minimum: 1).
+* `GMAIL_STATS_RATE_LIMIT_MS` — minimum spacing between Gmail API calls in
+  milliseconds (default: 25, i.e. ~40 requests/sec, minimum: 1).
+
+For example, to run gently against a project with a low quota:
+
+```console
+$ GMAIL_STATS_FETCH_CONCURRENCY=2 GMAIL_STATS_RATE_LIMIT_MS=100 cargo run
 ```
 
 This will trigger an OAuth flow which you launch in your browser, after which the access credentials are stored on disk in the local directory.
