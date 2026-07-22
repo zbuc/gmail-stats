@@ -138,12 +138,20 @@ async fn build_summary(pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Err
 
     // The app assumes one row per sender but nothing enforces it, so merge
     // here. COALESCE folds NULL senders into '' *before* grouping so they
-    // merge with literal-'' rows instead of forming a separate group. CAST
-    // guards the affinity-less mails_sent column against stray TEXT values.
+    // merge with literal-'' rows instead of forming a separate group. Both
+    // columns need CAST against the schema's loose types: `sender string`
+    // matches none of SQLite's affinity keywords, so the column has NUMERIC
+    // affinity and a numeric-looking From header (e.g. an SMS shortcode like
+    // `40404`) is stored as INTEGER/REAL, which sqlx's String decoder
+    // rejects. CAST ... AS TEXT normalizes the storage class (and merges an
+    // INTEGER 12345 row with a TEXT '12345' row) so decoding — and thus the
+    // whole viewer — survives such rows; the mails_sent CAST likewise guards
+    // against stray TEXT values.
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT COALESCE(sender, '') AS sender, \
+        "SELECT CAST(COALESCE(sender, '') AS TEXT) AS sender, \
                 COALESCE(SUM(CAST(mails_sent AS INTEGER)), 0) AS mails_sent \
-         FROM senders GROUP BY COALESCE(sender, '') ORDER BY mails_sent DESC",
+         FROM senders GROUP BY CAST(COALESCE(sender, '') AS TEXT) \
+         ORDER BY mails_sent DESC",
     )
     .fetch_all(pool)
     .await?;
@@ -194,4 +202,79 @@ fn error_response(err: &sqlx::Error) -> Response {
         Json(json!({ "error": kind, "message": message, "detail": detail })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn memory_pool() -> SqlitePool {
+        // One connection max: each sqlite::memory: connection is a separate
+        // empty database, so the pool must never hand out a second one.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open in-memory db");
+        // Mirror the README's real schema, quirky type names included.
+        sqlx::query("CREATE TABLE seen_mails (mail_id string)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE senders (sender string, mails_sent int)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool
+    }
+
+    /// `sender string` matches none of SQLite's affinity keywords, giving the
+    /// column NUMERIC affinity: numeric-looking From headers (SMS shortcodes,
+    /// `1e5`, `-1.5`) are stored as INTEGER/REAL, which sqlx's String decoder
+    /// rejects unless the query CASTs the column back to TEXT. Regression
+    /// test: one such row must not 500 the whole summary forever.
+    #[tokio::test]
+    async fn summary_survives_numeric_sender_rows() {
+        let pool = memory_pool().await;
+        sqlx::query("INSERT INTO senders VALUES ('40404', 7), ('-1.5', 2), ('a@b.com', 3)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Sanity-check the poisoned storage classes this test exists for.
+        let types: Vec<(String,)> =
+            sqlx::query_as("SELECT typeof(sender) FROM senders ORDER BY mails_sent DESC")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let types: Vec<&str> = types.iter().map(|(t,)| t.as_str()).collect();
+        assert_eq!(types, ["integer", "text", "real"]);
+
+        let summary = build_summary(&pool)
+            .await
+            .expect("summary must survive numeric-looking sender rows");
+        let senders = summary["senders"].as_array().unwrap();
+        assert_eq!(senders.len(), 3);
+        assert_eq!(senders[0]["sender"], "40404");
+        assert_eq!(senders[0]["mails_sent"], 7);
+        assert_eq!(senders[1]["sender"], "a@b.com");
+        assert_eq!(senders[2]["sender"], "-1.5");
+    }
+
+    /// NULL senders must keep merging with literal-'' rows (pre-existing
+    /// behavior the CAST fix must not regress).
+    #[tokio::test]
+    async fn summary_merges_null_and_empty_senders() {
+        let pool = memory_pool().await;
+        sqlx::query("INSERT INTO senders VALUES (NULL, 4), ('', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let summary = build_summary(&pool).await.unwrap();
+        let senders = summary["senders"].as_array().unwrap();
+        assert_eq!(senders.len(), 1);
+        assert_eq!(senders[0]["sender"], "");
+        assert_eq!(senders[0]["mails_sent"], 5);
+    }
 }
