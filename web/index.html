@@ -12,23 +12,53 @@
 </head>
 <body>
 <main>
-  <h1>gmail-stats <span>· local viewer</span></h1>
+  <header class="page-head">
+    <h1>gmail-stats <span>· local viewer</span></h1>
+    <span id="ingest-pill" class="pill hidden"><span class="dot" aria-hidden="true"></span><span id="pill-text"></span></span>
+  </header>
 
   <section id="loading">
     <p class="muted">Loading&hellip;</p>
   </section>
 
+  <!-- Onboarding: shown when the database is missing or empty and nothing is
+       running. Phase B is observe-only, so these cards show the exact CLI
+       commands to copy; launch buttons arrive in Phase C. -->
   <section id="setup" class="notice hidden">
-    <h2>No stats database found</h2>
-    <p>The viewer reads <code>./stats.db</code> from the directory it was started in,
-       but the database (or its tables) doesn't exist yet.</p>
-    <p>Create the tables, then run the scanner from the repo root:</p>
-    <pre>$ sqlite3 stats.db
-sqlite&gt; CREATE TABLE seen_mails (mail_id string);
-sqlite&gt; CREATE TABLE senders (sender string, mails_sent int);
-sqlite&gt; .quit
-$ cargo run</pre>
-    <p>When the scan finishes (or while it runs), come back here.</p>
+    <h2>No mail data yet</h2>
+    <p>Get your Gmail data into <code>stats.db</code> one of two ways, running the
+       command from the repo root in a terminal. Once a run starts, this page
+       notices it and fills in live.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>Scan Gmail (OAuth)</h3>
+        <p>Reads message metadata over the Gmail API. Needs a Google Cloud OAuth
+           client (<code>credentials.json</code> in the repo root) plus a one-time
+           browser consent.</p>
+        <div class="cmd">
+          <pre>cargo run</pre>
+          <button class="copy-btn" type="button">Copy</button>
+        </div>
+        <p class="callout">Using Advanced Protection? Google blocks this method
+           outright (<code>Error 400: policy_enforced</code>) — use the Takeout
+           import instead.</p>
+      </div>
+      <div class="card">
+        <h3>Import a Google Takeout mailbox</h3>
+        <ol>
+          <li>At <code>takeout.google.com</code>, export only <strong>Mail</strong>
+              (mbox format).</li>
+          <li>Wait for the export email — Google typically takes
+              <strong>about 2 days</strong> to prepare it for Advanced Protection
+              accounts.</li>
+          <li>Download, unzip, and import the <code>.mbox</code> file:</li>
+        </ol>
+        <div class="cmd">
+          <pre>cargo run -- import "path/to/All mail Including Spam and Trash.mbox"</pre>
+          <button class="copy-btn" type="button">Copy</button>
+        </div>
+      </div>
+    </div>
     <button id="retry-setup" type="button">Retry</button>
   </section>
 
@@ -38,7 +68,31 @@ $ cargo run</pre>
     <button id="retry-error" type="button">Retry</button>
   </section>
 
+  <!-- Observe-only progress panel for the active ingestion run. -->
+  <section id="ingest-panel" class="notice hidden">
+    <details open>
+      <summary>
+        <span id="run-source" class="badge"></span>
+        <span id="run-state" class="chip"></span>
+      </summary>
+      <div class="run-body">
+        <div class="bar hidden" id="run-bar"><div class="bar-fill" id="run-bar-fill"></div></div>
+        <p class="run-meta">
+          <span id="run-counts"></span>
+          <span id="run-rate" class="muted"></span>
+          <span id="run-eta" class="muted"></span>
+        </p>
+        <p class="warn hidden" id="run-stalled"></p>
+        <p class="muted" id="run-origin"></p>
+      </div>
+    </details>
+  </section>
+
   <section id="stats" class="hidden">
+    <div id="mixed-banner" class="warn-banner hidden">
+      Counts may include duplicates across scan + import: both sources have
+      written to this database, and exact cross-source dedupe hasn't run yet.
+    </div>
     <div class="tiles">
       <div class="tile">
         <div class="label">Total messages</div>
@@ -77,6 +131,13 @@ $ cargo run</pre>
       <button id="next-page" type="button">Next &rsaquo;</button>
     </nav>
     <p class="muted" id="generated-at"></p>
+  </section>
+
+  <!-- Run history strip, fed by /api/runs; hidden entirely in static/demo
+       hosting where the status endpoints don't exist. -->
+  <section id="history" class="hidden">
+    <h2 class="history-title">Recent runs</h2>
+    <ul id="history-list"></ul>
   </section>
 </main>
 </body>

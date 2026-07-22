@@ -632,6 +632,7 @@ dependencies = [
  "anyhow",
  "axum",
  "futures",
+ "getrandom 0.4.3",
  "google-gmail1",
  "lazy_static",
  "regex",
@@ -641,6 +642,7 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tower",
  "yup-oauth2",
 ]
 

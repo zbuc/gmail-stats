@@ -18,10 +18,8 @@ use tokio::sync::{mpsc, Mutex};
 use tokio::task;
 use tokio::time::{Interval, MissedTickBehavior};
 
-mod ingest;
-mod mbox;
-
-use ingest::{seen_mail, SeenMail, WriteMsg};
+use gmail_stats::ingest::{self, seen_mail, SeenMail, WriteMsg};
+use gmail_stats::mbox;
 
 type GmailHub =
     Gmail<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;

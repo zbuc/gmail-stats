@@ -9,6 +9,9 @@ edition = "2021"
 anyhow = "1.0"
 axum = "0.8"
 futures = "0.3"
+# CSPRNG for the viewer's per-process CSRF token (already in the tree
+# transitively via the TLS stack; this only makes it a direct dependency).
+getrandom = "0.4"
 google-gmail1 = "7.0"
 lazy_static = "1.5"
 regex = "1.13"
@@ -23,3 +26,5 @@ yup-oauth2 = "12"
 
 [dev-dependencies]
 tempfile = "3"
+# tower::ServiceExt::oneshot for exercising the axum router in endpoint tests.
+tower = { version = "0.5", features = ["util"] }
