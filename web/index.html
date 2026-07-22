@@ -22,19 +22,23 @@
   </section>
 
   <!-- Onboarding: shown when the database is missing or empty and nothing is
-       running. Phase B is observe-only, so these cards show the exact CLI
-       commands to copy; launch buttons arrive in Phase C. -->
+       running. The launch buttons (Phase C) only appear when the live viewer's
+       status endpoint exists; static hosting keeps the copyable CLI commands. -->
   <section id="setup" class="notice hidden">
     <h2>No mail data yet</h2>
-    <p>Get your Gmail data into <code>stats.db</code> one of two ways, running the
-       command from the repo root in a terminal. Once a run starts, this page
-       notices it and fills in live.</p>
+    <p>Get your Gmail data into <code>stats.db</code> one of two ways. Once a
+       run starts, this page follows it live.</p>
     <div class="cards">
       <div class="card">
         <h3>Scan Gmail (OAuth)</h3>
         <p>Reads message metadata over the Gmail API. Needs a Google Cloud OAuth
            client (<code>credentials.json</code> in the repo root) plus a one-time
            browser consent.</p>
+        <div class="launch live-only hidden">
+          <button id="start-scan" type="button" class="primary">Start scan</button>
+          <p id="scan-error" class="inline-error hidden"></p>
+        </div>
+        <p class="muted alt-cmd">Or from a terminal, in the repo root:</p>
         <div class="cmd">
           <pre>cargo run</pre>
           <button class="copy-btn" type="button">Copy</button>
@@ -43,7 +47,7 @@
            outright (<code>Error 400: policy_enforced</code>) — use the Takeout
            import instead.</p>
       </div>
-      <div class="card">
+      <div id="takeout-card" class="card">
         <h3>Import a Google Takeout mailbox</h3>
         <ol>
           <li>At <code>takeout.google.com</code>, export only <strong>Mail</strong>
@@ -53,6 +57,13 @@
               accounts.</li>
           <li>Download, unzip, and import the <code>.mbox</code> file:</li>
         </ol>
+        <div class="launch live-only hidden">
+          <input id="mbox-path" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="/absolute/path/to/All mail Including Spam and Trash.mbox">
+          <button id="start-import" type="button" class="primary">Import</button>
+          <p id="import-error" class="inline-error hidden"></p>
+        </div>
+        <p class="muted alt-cmd">Or from a terminal, in the repo root:</p>
         <div class="cmd">
           <pre>cargo run -- import "path/to/All mail Including Spam and Trash.mbox"</pre>
           <button class="copy-btn" type="button">Copy</button>
@@ -68,7 +79,8 @@
     <button id="retry-error" type="button">Retry</button>
   </section>
 
-  <!-- Observe-only progress panel for the active ingestion run. -->
+  <!-- Progress panel for the active ingestion run. Cancel and Log only appear
+       for runs this viewer process spawned (owns_active_run). -->
   <section id="ingest-panel" class="notice hidden">
     <details open>
       <summary>
@@ -82,8 +94,15 @@
           <span id="run-rate" class="muted"></span>
           <span id="run-eta" class="muted"></span>
         </p>
+        <p class="auth-slot hidden" id="run-auth"></p>
         <p class="warn hidden" id="run-stalled"></p>
         <p class="muted" id="run-origin"></p>
+        <div class="run-actions">
+          <button id="run-cancel" type="button" class="danger hidden">Cancel</button>
+          <button id="run-log" type="button" class="hidden">Show log</button>
+        </div>
+        <p id="cancel-error" class="inline-error hidden"></p>
+        <pre id="run-log-view" class="log hidden"></pre>
       </div>
     </details>
   </section>

@@ -34,12 +34,16 @@ const state = {
   showHidden: false,
   hidden: loadHidden(),
   view: "loading",
+  // Keeps the setup view visible even when data exists: the "use Takeout
+  // instead" deep-link from a policy_enforced failure lands on its card.
+  pinnedSetup: false,
 };
 
-// Everything the observe-only ingestion UI knows, all viewer-side.
+// Everything the ingestion UI knows, all viewer-side.
 const ingest = {
   // False once /api/status turns out not to exist (the static Pages demo, or
-  // any non-viewer host): every piece of ingestion UI hides and polling stops.
+  // any non-viewer host): every piece of ingestion UI hides, polling stops,
+  // and no mutating request is ever attempted.
   available: true,
   status: null,
   runsNow: 0,
@@ -48,6 +52,10 @@ const ingest = {
   lastSummaryAt: 0,
   runsKey: null,
   wasActive: false,
+  // CSRF token from the latest /api/status payload; sent on every POST.
+  csrf: null,
+  launching: false,
+  logOpen: false,
 };
 
 function loadPageSize() {
@@ -191,6 +199,161 @@ function hideIngestUi() {
   document.getElementById("ingest-panel").classList.add("hidden");
   document.getElementById("history").classList.add("hidden");
   document.getElementById("mixed-banner").classList.add("hidden");
+  // Launch controls exist only against the live viewer: without a status
+  // endpoint there is no CSRF token and no spawn surface.
+  for (const el of document.querySelectorAll(".live-only")) {
+    el.classList.add("hidden");
+  }
+}
+
+// --- mutating calls (Phase C) ----------------------------------------------
+
+// Every mutating request carries the full client side of the CSRF stack:
+// JSON content type plus the per-process token learned from /api/status.
+// (The browser adds Origin/Sec-Fetch-Site itself.)
+async function apiPost(path, body) {
+  if (!ingest.available || !ingest.csrf) {
+    throw new Error("ingestion API unavailable");
+  }
+  return fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Gmail-Stats-Csrf": ingest.csrf,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+// Start a run and surface any error inline (all error text via textContent).
+async function startRun(body, errorEl) {
+  if (ingest.launching) return;
+  ingest.launching = true;
+  if (errorEl) errorEl.classList.add("hidden");
+  try {
+    const response = await apiPost("/api/runs", body);
+    if (response.status === 202) {
+      state.pinnedSetup = false;
+      pollStatus();
+      return;
+    }
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      // non-JSON error body; fall through to the generic message
+    }
+    if (errorEl) {
+      errorEl.textContent =
+        (payload && payload.message) || `Could not start the run (HTTP ${response.status}).`;
+      errorEl.classList.remove("hidden");
+    }
+  } catch (err) {
+    if (errorEl) {
+      errorEl.textContent = "Could not reach the server.";
+      errorEl.classList.remove("hidden");
+    }
+  } finally {
+    ingest.launching = false;
+  }
+}
+
+async function cancelActiveRun() {
+  const run = activeRun();
+  if (!run || !ingest.status || ingest.status.owns_active_run !== true) return;
+  const errorEl = document.getElementById("cancel-error");
+  errorEl.classList.add("hidden");
+  try {
+    const response = await apiPost(`/api/runs/${Number(run.run_id)}/cancel`, {});
+    if (response.status !== 202) {
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (err) {
+        // keep the generic message
+      }
+      errorEl.textContent =
+        (payload && payload.message) || `Cancel failed (HTTP ${response.status}).`;
+      errorEl.classList.remove("hidden");
+    }
+    pollStatus();
+  } catch (err) {
+    errorEl.textContent = "Could not reach the server.";
+    errorEl.classList.remove("hidden");
+  }
+}
+
+async function refreshLog() {
+  const run = activeRun();
+  const view = document.getElementById("run-log-view");
+  if (!run || !ingest.logOpen) return;
+  try {
+    const response = await fetch(`/api/runs/${Number(run.run_id)}/log`);
+    if (!response.ok) return;
+    const body = await response.json();
+    const lines = Array.isArray(body.lines) ? body.lines : [];
+    view.textContent = lines.length > 0 ? lines.join("\n") : "(no stderr output yet)";
+  } catch (err) {
+    // Leave whatever is shown; the next poll retries.
+  }
+}
+
+// Deep-link a policy_enforced failure to the Takeout card: pin the setup view
+// open (even when data already exists) and flash the card.
+function showTakeoutCard() {
+  state.pinnedSetup = true;
+  showView("setup");
+  const card = document.getElementById("takeout-card");
+  card.classList.remove("flash");
+  // Restart the highlight animation on repeat clicks.
+  void card.offsetWidth;
+  card.classList.add("flash");
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+/// The only URL the UI will ever hyperlink: a Google consent URL. Anything
+/// else (however it got into auth_url) renders as inert text.
+function isGoogleAuthUrl(url) {
+  if (typeof url !== "string" || !url.startsWith("https://accounts.google.com/")) {
+    return false;
+  }
+  try {
+    return new URL(url).origin === "https://accounts.google.com";
+  } catch (err) {
+    return false;
+  }
+}
+
+function renderAuthSlot(run) {
+  const slot = document.getElementById("run-auth");
+  if (!run || run.state !== "awaiting_auth") {
+    slot.classList.add("hidden");
+    slot.replaceChildren();
+    return;
+  }
+  slot.replaceChildren();
+  const label = document.createElement("span");
+  label.textContent = "Google is waiting for your consent: ";
+  slot.appendChild(label);
+  const url = run.auth_url;
+  if (isGoogleAuthUrl(url)) {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "Authorize in Google";
+    slot.appendChild(link);
+  } else if (url) {
+    // Unexpected URL: show it as inert text, never as a link.
+    const inert = document.createElement("span");
+    inert.textContent = String(url);
+    slot.appendChild(inert);
+  } else {
+    const waiting = document.createElement("span");
+    waiting.textContent = "waiting for the consent URL…";
+    slot.appendChild(waiting);
+  }
+  slot.classList.remove("hidden");
 }
 
 function renderPill() {
@@ -220,6 +383,9 @@ function renderPanel() {
   const panel = document.getElementById("ingest-panel");
   if (!ingestActive()) {
     panel.classList.add("hidden");
+    ingest.logOpen = false;
+    document.getElementById("run-log-view").classList.add("hidden");
+    document.getElementById("run-log").textContent = "Show log";
     return;
   }
   const run = activeRun();
@@ -269,9 +435,21 @@ function renderPanel() {
     stalled.classList.add("hidden");
   }
 
-  // Phase B never owns a run (owns_active_run is always false): every run was
-  // started from a terminal, and that's where it can be cancelled.
-  document.getElementById("run-origin").textContent = status.owns_active_run
+  renderAuthSlot(run);
+
+  // Cancel and Log exist only for runs this viewer process spawned; a
+  // terminal-started (or pre-restart) run is watch-only here.
+  const owned = status.owns_active_run === true && Boolean(run);
+  document.getElementById("run-cancel").classList.toggle("hidden", !owned);
+  document.getElementById("run-log").classList.toggle("hidden", !owned);
+  if (!owned) {
+    ingest.logOpen = false;
+    document.getElementById("run-log-view").classList.add("hidden");
+    document.getElementById("run-log").textContent = "Show log";
+  } else if (ingest.logOpen) {
+    refreshLog();
+  }
+  document.getElementById("run-origin").textContent = owned
     ? ""
     : "Started from the terminal — cancel it with Ctrl-C there.";
 
@@ -307,7 +485,61 @@ function historyItem(run, nowUnix) {
     error.textContent = run.error_kind ? `${run.error_kind}: ${run.error}` : run.error;
     li.appendChild(error);
   }
+
+  const actions = historyActions(run);
+  if (actions) li.appendChild(actions);
   return li;
+}
+
+// Retry/Resume affordances for finished runs (issue #26): interrupted imports
+// resume from their byte offset (fingerprint-validated by the ingester);
+// failed scans get a best-effort resume from the persisted page token; and
+// policy_enforced steers to the Takeout card. Only rendered against the live
+// viewer, and only while nothing is running.
+function historyActions(run) {
+  if (!ingest.available || ingestActive()) return null;
+  const finished = ["failed", "cancelled", "abandoned"].includes(run.state);
+  if (!finished) return null;
+
+  const actions = document.createElement("div");
+  actions.className = "history-actions";
+  const addButton = (label, body) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.addEventListener("click", () => startRun(body, null));
+    actions.appendChild(btn);
+  };
+
+  if (run.source === "mbox") {
+    if (Number(run.bytes_done) > 0 && run.mbox_path) {
+      addButton("Resume import", { source: "mbox", resume_run_id: Number(run.run_id) });
+    } else if (run.mbox_path) {
+      addButton("Retry", { source: "mbox", path: String(run.mbox_path) });
+    }
+  } else if (run.source === "gmail_api") {
+    if (run.state === "failed" || run.state === "abandoned") {
+      addButton("Retry", { source: "gmail_api" });
+    }
+    if (Number(run.messages_seen) > 0) {
+      addButton("Resume — may restart from the beginning", {
+        source: "gmail_api",
+        resume_run_id: Number(run.run_id),
+      });
+    } else if (run.state === "cancelled") {
+      addButton("Start again", { source: "gmail_api" });
+    }
+  }
+
+  if (run.error_kind === "policy_enforced") {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Use Takeout instead →";
+    btn.addEventListener("click", showTakeoutCard);
+    actions.appendChild(btn);
+  }
+
+  return actions.childElementCount > 0 ? actions : null;
 }
 
 function renderHistory(runs, nowUnix) {
@@ -346,12 +578,13 @@ async function fetchRuns() {
 // status changes can flip it: onboarding appears when the DB is missing/empty
 // and idle, and leaves as soon as a run starts or data exists.
 function reconcileMainView() {
-  if (shouldOnboard()) {
+  if (shouldOnboard() || (state.pinnedSetup && !ingestActive())) {
     if (state.view === "stats" || state.view === "setup" || state.view === "loading") {
       showView("setup");
     }
     return;
   }
+  state.pinnedSetup = false;
   if (state.view === "setup") {
     // Onboarding no longer applies (a run started, or data appeared).
     if (state.data) {
@@ -366,6 +599,11 @@ function renderIngest() {
   if (!ingest.available) {
     hideIngestUi();
     return;
+  }
+  // Live viewer confirmed: reveal the launch controls (they start hidden so
+  // the static demo never shows them, even before the first status probe).
+  for (const el of document.querySelectorAll(".live-only")) {
+    el.classList.toggle("hidden", !ingest.status);
   }
   renderPill();
   renderPanel();
@@ -429,6 +667,7 @@ async function pollStatus() {
   }
 
   ingest.status = body;
+  ingest.csrf = typeof body.csrf_token === "string" ? body.csrf_token : null;
   renderIngest();
 
   const key = runsKeyOf(body);
@@ -491,7 +730,7 @@ async function refreshSummary() {
 }
 
 function update() {
-  if (shouldOnboard()) {
+  if (shouldOnboard() || (state.pinnedSetup && !ingestActive())) {
     showView("setup");
     return;
   }
@@ -582,8 +821,44 @@ async function load() {
   update();
 }
 
-document.getElementById("retry-setup").addEventListener("click", load);
+document.getElementById("retry-setup").addEventListener("click", () => {
+  state.pinnedSetup = false;
+  load();
+});
 document.getElementById("retry-error").addEventListener("click", load);
+
+// Launch buttons (Phase C). Guarded by ingest.available: they are hidden —
+// and inert — on static hosting.
+document.getElementById("start-scan").addEventListener("click", () => {
+  if (!ingest.available) return;
+  startRun({ source: "gmail_api" }, document.getElementById("scan-error"));
+});
+document.getElementById("start-import").addEventListener("click", () => {
+  if (!ingest.available) return;
+  const path = document.getElementById("mbox-path").value.trim();
+  const errorEl = document.getElementById("import-error");
+  if (!path) {
+    errorEl.textContent = "Paste the absolute path to the .mbox file first.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+  startRun({ source: "mbox", path }, errorEl);
+});
+document.getElementById("mbox-path").addEventListener("keydown", event => {
+  if (event.key === "Enter") document.getElementById("start-import").click();
+});
+document.getElementById("run-cancel").addEventListener("click", cancelActiveRun);
+document.getElementById("run-log").addEventListener("click", () => {
+  ingest.logOpen = !ingest.logOpen;
+  const view = document.getElementById("run-log-view");
+  const btn = document.getElementById("run-log");
+  view.classList.toggle("hidden", !ingest.logOpen);
+  btn.textContent = ingest.logOpen ? "Hide log" : "Show log";
+  if (ingest.logOpen) {
+    view.textContent = "Loading…";
+    refreshLog();
+  }
+});
 document.getElementById("search").addEventListener("input", event => {
   state.query = event.target.value;
   state.page = 1;

@@ -51,10 +51,13 @@ OPTIONS:
                            [env: GMAIL_STATS_CREDENTIALS] [default: credentials.json]
     --tokens <PATH>        OAuth token cache file (scan only)
                            [env: GMAIL_STATS_TOKENS] [default: tokencache.json]
-    --resume <RUN_ID>      import only: resume a cancelled/failed/abandoned
-                           import from its recorded byte offset; falls back to
-                           a full re-parse if the file changed (dedupe keeps
-                           the counts correct either way)
+    --resume <RUN_ID>      resume an earlier run of the same kind.
+                           import: continue from the recorded byte offset,
+                           falling back to a full re-parse if the file changed;
+                           scan: start listing from the run's persisted page
+                           token, silently restarting from the beginning when
+                           the token has expired (seen-mail dedupe keeps the
+                           counts correct either way)
     --quiet                only errors and the final summary
     --verbose              per-message detail (prints every sender)
     -h, --help             show this help
@@ -88,7 +91,7 @@ fn chatty() -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
-    Scan,
+    Scan { resume: Option<i64> },
     Import { path: PathBuf, resume: Option<i64> },
 }
 
@@ -159,10 +162,7 @@ fn parse_args(
             if positionals.len() > 1 {
                 return Err(format!("unexpected argument {:?}", positionals[1]));
             }
-            if resume.is_some() {
-                return Err("--resume is only valid with the import subcommand".to_string());
-            }
-            Mode::Scan
+            Mode::Scan { resume }
         }
         Some("import") => {
             let path = positionals
@@ -284,7 +284,7 @@ async fn main() -> anyhow::Result<()> {
     let cancel = spawn_signal_handler();
 
     match &cfg.mode {
-        Mode::Scan => run_scan(&cfg, &options, writer_conn, cancel).await,
+        Mode::Scan { resume } => run_scan(&cfg, &options, writer_conn, cancel, *resume).await,
         Mode::Import { path, resume } => {
             let summary = run_import(&options, writer_conn, path, *resume, cancel).await?;
             report_import_summary(&summary, path);
@@ -614,6 +614,7 @@ async fn run_scan(
     options: &SqliteConnectOptions,
     mut writer_conn: SqliteConnection,
     cancel: Arc<AtomicBool>,
+    resume: Option<i64>,
 ) -> anyhow::Result<()> {
     let fetch_concurrency: usize =
         env_or("GMAIL_STATS_FETCH_CONCURRENCY", DEFAULT_FETCH_CONCURRENCY)?;
@@ -634,6 +635,14 @@ async fn run_scan(
         .max_connections(fetch_concurrency as u32)
         .connect_with(options.clone())
         .await?;
+
+    // Best-effort resume (issue #26 Q4): start listing from the page token the
+    // resumed run persisted. If Gmail rejects the token as expired, work()
+    // silently restarts from page one — seen-mail dedupe keeps that correct.
+    let resumed_token = match resume {
+        None => None,
+        Some(run_id) => resolve_scan_resume(&mut writer_conn, run_id).await?,
+    };
 
     let run_id = ingest::create_run(&mut writer_conn, "gmail_api", None).await?;
     let (mut write_tx, write_rx) = mpsc::channel::<WriteMsg>(100);
@@ -673,12 +682,17 @@ async fn run_scan(
 
     // Create an authenticator that uses an InstalledFlow to authenticate. The
     // authentication tokens are persisted to the token cache file, so they are
-    // cached to disk and refreshed once they've expired.
+    // cached to disk and refreshed once they've expired. The custom delegate
+    // surfaces the consent URL on the run row (state='awaiting_auth') so the
+    // web viewer can offer an "Authorize in Google" link for spawned runs.
     let auth = match yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
         yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
     )
     .persist_tokens_to_disk(cfg.tokens.clone())
+    .flow_delegate(Box::new(RunRowAuthDelegate {
+        write_tx: write_tx.downgrade(),
+    }))
     .build()
     .await
     {
@@ -698,6 +712,40 @@ async fn run_scan(
             return Err(anyhow::Error::new(e).context("building the OAuth authenticator"));
         }
     };
+
+    // Acquire a token up front instead of lazily on the first API call, so an
+    // unattended consent is bounded by GMAIL_STATS_AUTH_TIMEOUT (the run turns
+    // failed/auth_required instead of hanging forever) and the run row can
+    // transition awaiting_auth -> running the moment tokens arrive. When the
+    // token cache is already valid this never prompts.
+    let auth_timeout = Duration::from_secs(env_or(
+        "GMAIL_STATS_AUTH_TIMEOUT",
+        DEFAULT_AUTH_TIMEOUT_SECS,
+    )?);
+    let scopes = ["https://www.googleapis.com/auth/gmail.readonly"];
+    if let Err(e) = consent_within(auth.token(&scopes), auth_timeout).await {
+        drop(write_tx);
+        let _ = writer_handle.await;
+        let msg = format!("{e:#}");
+        ingest::finish_run(
+            options,
+            run_id,
+            "failed",
+            Some(consent_error_kind(&msg)),
+            Some(&msg),
+        )
+        .await
+        .ok();
+        return Err(e);
+    }
+    // Tokens are in hand: leave awaiting_auth (a no-op when consent was never
+    // needed — the row is already 'running').
+    let _ = write_tx
+        .send(WriteMsg::AuthState {
+            state: "running",
+            auth_url: None,
+        })
+        .await;
 
     let hub = Gmail::new(
         hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(
@@ -742,7 +790,8 @@ async fn run_scan(
     // progress in between exhaust the budget.
     let mut retries = 0;
     let mut progress = ScanProgress {
-        resume_token: None,
+        resume_unverified: resumed_token.is_some(),
+        resume_token: resumed_token,
         pages_done: 0,
         messages_listed: 0,
     };
@@ -934,6 +983,145 @@ where
     }
 }
 
+/// Default bound on how long an interactive OAuth consent may stay pending
+/// before the run is marked failed/auth_required. Override with the
+/// GMAIL_STATS_AUTH_TIMEOUT env var (seconds).
+const DEFAULT_AUTH_TIMEOUT_SECS: u64 = 600;
+
+/// Look up the persisted page token for `scan --resume <run_id>`. Missing or
+/// wrong-source runs are hard errors (the user named a specific run); a run
+/// without a saved token just means a from-scratch scan.
+async fn resolve_scan_resume(
+    conn: &mut SqliteConnection,
+    run_id: i64,
+) -> anyhow::Result<Option<String>> {
+    let row = sqlx::query("SELECT source, resume_token FROM ingest_runs WHERE run_id = ?")
+        .bind(run_id)
+        .fetch_optional(&mut *conn)
+        .await?;
+    let Some(row) = row else {
+        anyhow::bail!("no ingest run {run_id} to resume");
+    };
+    let source: String = row.try_get("source")?;
+    anyhow::ensure!(
+        source == "gmail_api",
+        "run {run_id} is a {source} run, not a Gmail API scan"
+    );
+    let token: Option<String> = row.try_get("resume_token")?;
+    match token {
+        Some(token) if !token.is_empty() => {
+            if chatty() {
+                println!("resuming scan run {run_id} from its saved page token (best effort)");
+            }
+            Ok(Some(token))
+        }
+        _ => {
+            if chatty() {
+                println!("run {run_id} saved no page token; scanning from the beginning");
+            }
+            Ok(None)
+        }
+    }
+}
+
+/// InstalledFlow delegate that mirrors consent progress onto the run row:
+/// state='awaiting_auth' plus the URL while Google waits for the user, so the
+/// web viewer can render a validated "Authorize in Google" link. Terminal UX
+/// is unchanged: the URL is still printed unless --quiet.
+///
+/// Holds only a *weak* sender: the authenticator (and thus this delegate)
+/// lives as long as the whole scan, and a strong clone here would keep the
+/// writer channel open forever, deadlocking the end-of-scan drain.
+struct RunRowAuthDelegate {
+    write_tx: mpsc::WeakSender<WriteMsg>,
+}
+
+impl yup_oauth2::authenticator_delegate::InstalledFlowDelegate for RunRowAuthDelegate {
+    fn present_user_url<'a>(
+        &'a self,
+        url: &'a str,
+        need_code: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + 'a>>
+    {
+        Box::pin(present_auth_url(self.write_tx.clone(), url, need_code))
+    }
+}
+
+async fn present_auth_url(
+    write_tx: mpsc::WeakSender<WriteMsg>,
+    url: &str,
+    need_code: bool,
+) -> Result<String, String> {
+    // Best-effort: consent must not die just because the writer is gone.
+    if let Some(write_tx) = write_tx.upgrade() {
+        let _ = write_tx
+            .send(WriteMsg::AuthState {
+                state: "awaiting_auth",
+                auth_url: Some(url.to_string()),
+            })
+            .await;
+    }
+    if need_code {
+        // Parity with yup-oauth2's default delegate: interactive fallback
+        // reads the code from stdin. Spawned runs use HTTPRedirect
+        // (need_code=false) and have stdin null, so this path is
+        // terminal-only.
+        if chatty() {
+            println!(
+                "Please direct your browser to {url}, follow the instructions and enter \
+                 the code displayed here: "
+            );
+        }
+        use tokio::io::AsyncBufReadExt;
+        let mut user_input = String::new();
+        tokio::io::BufReader::new(tokio::io::stdin())
+            .read_line(&mut user_input)
+            .await
+            .map_err(|e| format!("couldn't read code: {e}"))?;
+        user_input.truncate(user_input.trim_end().len());
+        Ok(user_input)
+    } else {
+        if chatty() {
+            println!(
+                "Please direct your browser to {url} and follow the instructions \
+                 displayed there."
+            );
+        }
+        Ok(String::new())
+    }
+}
+
+/// Bound an OAuth token acquisition so an unattended consent (nobody ever
+/// opens the URL) becomes a clean failure instead of an eternal hang.
+async fn consent_within<T, E>(
+    fut: impl std::future::Future<Output = Result<T, E>>,
+    timeout: Duration,
+) -> anyhow::Result<T>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    match tokio::time::timeout(timeout, fut).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(anyhow::Error::new(e).context("acquiring an OAuth token")),
+        Err(_) => anyhow::bail!(
+            "OAuth consent was not completed within {}s \
+             (set GMAIL_STATS_AUTH_TIMEOUT to adjust)",
+            timeout.as_secs()
+        ),
+    }
+}
+
+/// error_kind for a failed consent: Advanced Protection rejections keep their
+/// dedicated kind so the UI can steer to Takeout; everything else (timeout,
+/// declined consent, broken client secret) is auth_required.
+fn consent_error_kind(message: &str) -> &'static str {
+    if message.contains("policy_enforced") {
+        "policy_enforced"
+    } else {
+        "auth_required"
+    }
+}
+
 struct ScanCtx<'a> {
     pool: &'a Pool<Sqlite>,
     hub: &'a GmailHub,
@@ -947,9 +1135,13 @@ struct ScanCtx<'a> {
 /// token to resume from, advanced only once a page has been fully processed:
 /// a retry re-lists the page that failed instead of restarting the whole
 /// mailbox scan from page one. It is also persisted to the run row after
-/// every page, so a future scan could pick it up best-effort.
+/// every page, so `scan --resume <run_id>` can pick it up best-effort.
 struct ScanProgress {
     resume_token: Option<String>,
+    /// True while resume_token came from a previous run's row and has not yet
+    /// produced a successful list: Gmail rejecting it (expired/invalid) means
+    /// a silent from-scratch restart, not a failure.
+    resume_unverified: bool,
     pages_done: u64,
     messages_listed: u64,
 }
@@ -961,8 +1153,31 @@ async fn work(ctx: &ScanCtx<'_>, progress: &mut ScanProgress) -> anyhow::Result<
         if ctx.cancel.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let result =
-            list_messages(ctx.hub, progress.resume_token.as_deref(), ctx.rate_limiter).await?;
+        let result = match list_messages(
+            ctx.hub,
+            progress.resume_token.as_deref(),
+            ctx.rate_limiter,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) if progress.resume_unverified => {
+                // The persisted token from a previous run was rejected
+                // (typically expired). Fall back to page one silently —
+                // seen-mail dedupe makes the re-listing idempotent.
+                progress.resume_unverified = false;
+                progress.resume_token = None;
+                if verbose() {
+                    println!(
+                        "persisted resume token was rejected ({e:#}); \
+                             restarting the scan from the beginning"
+                    );
+                }
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        progress.resume_unverified = false;
 
         let next_page_token = result.next_page_token;
         let messages = result.messages.unwrap_or_default();
@@ -1497,7 +1712,7 @@ mod tests {
     #[test]
     fn bare_invocation_is_the_scan_with_default_paths() {
         let cfg = run_cfg(&[], no_env);
-        assert_eq!(cfg.mode, Mode::Scan);
+        assert_eq!(cfg.mode, Mode::Scan { resume: None });
         assert_eq!(cfg.db, PathBuf::from("stats.db"));
         assert_eq!(cfg.credentials, PathBuf::from("credentials.json"));
         assert_eq!(cfg.tokens, PathBuf::from("tokencache.json"));
@@ -1506,7 +1721,19 @@ mod tests {
 
     #[test]
     fn explicit_scan_subcommand_is_equivalent() {
-        assert_eq!(run_cfg(&["scan"], no_env).mode, Mode::Scan);
+        assert_eq!(run_cfg(&["scan"], no_env).mode, Mode::Scan { resume: None });
+    }
+
+    #[test]
+    fn scan_accepts_a_resume_run_id() {
+        assert_eq!(
+            run_cfg(&["scan", "--resume", "5"], no_env).mode,
+            Mode::Scan { resume: Some(5) }
+        );
+        assert_eq!(
+            run_cfg(&["--resume", "5"], no_env).mode,
+            Mode::Scan { resume: Some(5) }
+        );
     }
 
     #[test]
@@ -1554,7 +1781,6 @@ mod tests {
         for args in [
             &["--quiet", "--verbose"][..],
             &["import"][..],
-            &["--resume", "3"][..],
             &["--resume", "x", "import", "f.mbox"][..],
             &["frobnicate"][..],
             &["--frobnicate"][..],
@@ -1787,6 +2013,135 @@ mod tests {
             .try_get("state")
             .unwrap();
         assert_eq!(state, "cancelled");
+    }
+
+    // --- scan resume + OAuth consent surfacing ---
+
+    #[tokio::test]
+    async fn resolve_scan_resume_returns_the_persisted_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+        let run_id = ingest::create_run(&mut conn, "gmail_api", None)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE ingest_runs SET resume_token = 'tok-123' WHERE run_id = ?")
+            .bind(run_id)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        let token = resolve_scan_resume(&mut conn, run_id).await.unwrap();
+        assert_eq!(token.as_deref(), Some("tok-123"));
+    }
+
+    #[tokio::test]
+    async fn resolve_scan_resume_without_a_token_scans_from_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+        let run_id = ingest::create_run(&mut conn, "gmail_api", None)
+            .await
+            .unwrap();
+        assert_eq!(resolve_scan_resume(&mut conn, run_id).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolve_scan_resume_rejects_missing_and_wrong_source_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+
+        let err = resolve_scan_resume(&mut conn, 999).await.unwrap_err();
+        assert!(err.to_string().contains("no ingest run"));
+
+        let run_id = ingest::create_run(&mut conn, "mbox", None).await.unwrap();
+        let err = resolve_scan_resume(&mut conn, run_id).await.unwrap_err();
+        assert!(err.to_string().contains("not a Gmail API scan"));
+    }
+
+    /// The consent delegate writes state='awaiting_auth' + auth_url onto the
+    /// run row via the writer channel, and the post-consent AuthState message
+    /// returns it to 'running'. No real OAuth is involved: the delegate is
+    /// called directly, exactly as yup-oauth2 would.
+    #[tokio::test]
+    async fn auth_delegate_surfaces_the_consent_url_on_the_run_row() {
+        use google_gmail1::yup_oauth2::authenticator_delegate::InstalledFlowDelegate;
+
+        let dir = tempfile::tempdir().unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+        let mut conn = migrated_conn(&options).await;
+        let run_id = ingest::create_run(&mut conn, "gmail_api", None)
+            .await
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel::<WriteMsg>(8);
+        let writer = task::spawn(ingest::db_writer(conn, rx, run_id));
+
+        let delegate = RunRowAuthDelegate {
+            write_tx: tx.downgrade(),
+        };
+        let url = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y";
+        let code = delegate.present_user_url(url, false).await.unwrap();
+        assert_eq!(code, "", "HTTPRedirect mode returns no code");
+
+        // Let the writer drain the awaiting_auth message, then check the row.
+        tx.send(WriteMsg::Progress {
+            messages_seen: 0,
+            bytes_done: None,
+            resume_token: None,
+            total_estimate: None,
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut check = SqliteConnection::connect_with(&options).await.unwrap();
+        let row = sqlx::query("SELECT state, auth_url FROM ingest_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&mut check)
+            .await
+            .unwrap();
+        assert_eq!(row.try_get::<String, _>("state").unwrap(), "awaiting_auth");
+        assert_eq!(row.try_get::<String, _>("auth_url").unwrap(), url);
+
+        // Tokens arrived: the scanner sends the running transition.
+        tx.send(WriteMsg::AuthState {
+            state: "running",
+            auth_url: None,
+        })
+        .await
+        .unwrap();
+        // The delegate holds a Sender clone; both must drop for the writer
+        // to drain and exit.
+        drop(delegate);
+        drop(tx);
+        writer.await.unwrap().unwrap();
+        let row = sqlx::query("SELECT state, auth_url FROM ingest_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&mut check)
+            .await
+            .unwrap();
+        assert_eq!(row.try_get::<String, _>("state").unwrap(), "running");
+        assert_eq!(row.try_get::<Option<String>, _>("auth_url").unwrap(), None);
+    }
+
+    /// An unattended consent (token future never resolves) must convert into
+    /// an error after the timeout, and its kind must map to auth_required.
+    #[tokio::test]
+    async fn consent_timeout_becomes_auth_required() {
+        let err = consent_within(
+            std::future::pending::<Result<(), std::io::Error>>(),
+            Duration::from_millis(50),
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("consent was not completed"), "got: {msg}");
+        assert_eq!(consent_error_kind(&msg), "auth_required");
+        assert_eq!(
+            consent_error_kind("Error 400: policy_enforced"),
+            "policy_enforced"
+        );
     }
 
     #[tokio::test]
