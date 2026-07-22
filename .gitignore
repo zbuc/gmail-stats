@@ -2,5 +2,4 @@
 tokencache.json
 stats.db*
 credentials.json
-Cargo.lock
 *.swp

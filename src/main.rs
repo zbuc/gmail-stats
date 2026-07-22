@@ -2,12 +2,15 @@ use std::str::FromStr;
 
 use futures::TryStreamExt;
 use google_gmail1::api::Message;
-use google_gmail1::{api::Scope, hyper, hyper_rustls, oauth2, Gmail};
+use google_gmail1::{api::Scope, hyper_rustls, hyper_util, yup_oauth2, Gmail};
 use lazy_static::lazy_static;
 use regex::Regex;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Pool, Row, Sqlite, SqliteExecutor, Transaction};
 use tokio::task;
+
+type GmailHub =
+    Gmail<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>>;
 
 lazy_static! {
     static ref EMAIL_RE_1: Regex =
@@ -35,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     // Read application OAuth secret from a file.
-    let secret = oauth2::read_application_secret("credentials.json")
+    let secret = yup_oauth2::read_application_secret("credentials.json")
         .await
         .expect("credentials.json");
 
@@ -43,9 +46,9 @@ async fn main() -> anyhow::Result<()> {
     // authentication tokens are persisted to a file named tokencache.json. The
     // authenticator takes care of caching tokens to disk and refreshing tokens once
     // they've expired.
-    let auth = oauth2::InstalledFlowAuthenticator::builder(
+    let auth = yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
-        oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
     )
     .persist_tokens_to_disk("tokencache.json")
     .build()
@@ -53,12 +56,10 @@ async fn main() -> anyhow::Result<()> {
     .unwrap();
 
     let mut hub = Gmail::new(
-        hyper::Client::builder().build(
-            // hyper_rustls::HttpsConnector::with_native_roots()
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(
             hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots()
+                .with_native_roots()?
                 .https_or_http()
-                .enable_http1()
                 .enable_http2()
                 .build(),
         ),
@@ -85,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn work(pool: &Pool<Sqlite>, hub: &mut Gmail) -> anyhow::Result<()> {
+async fn work(pool: &Pool<Sqlite>, hub: &mut GmailHub) -> anyhow::Result<()> {
     // Fetch 500 messages at a time...
     let result = hub
         .users()
@@ -119,7 +120,7 @@ async fn work(pool: &Pool<Sqlite>, hub: &mut Gmail) -> anyhow::Result<()> {
 async fn parse_messages(
     pool: &Pool<Sqlite>,
     messages: Vec<Message>,
-    hub: &mut Gmail,
+    hub: &mut GmailHub,
 ) -> anyhow::Result<()> {
     // Then fetch each individual message and increment the counter for the sender.
     // let mut handles = Vec::new();
@@ -132,7 +133,7 @@ async fn parse_messages(
         let mut tx = pool.begin().await?;
         if !seen_mail(
             message_meta.id.as_ref().expect("message missing id"),
-            &mut tx,
+            &mut *tx,
         )
         .await?
         {
@@ -156,7 +157,7 @@ async fn parse_messages(
                     .collect::<Vec<_>>()
             );
 
-            mark_seen(&message, &mut tx).await?;
+            mark_seen(&message, &mut *tx).await?;
             increment_sender_mails(&message, &mut tx).await?;
         }
         tx.commit().await?;
@@ -202,13 +203,13 @@ async fn increment_sender_mails(
     let sender = cleanup_sender(get_sender(message)?);
     let row = sqlx::query("SELECT mails_sent FROM senders WHERE sender = ?")
         .bind(&sender)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
     if row.is_none() {
         // no match
         sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES (?, 1)")
             .bind(&sender)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
 
         return Ok(());
@@ -228,7 +229,7 @@ async fn increment_sender_mails(
     sqlx::query("UPDATE senders SET mails_sent = ? WHERE sender = ?")
         .bind(mails_sent)
         .bind(&sender)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
 
     Ok(())
