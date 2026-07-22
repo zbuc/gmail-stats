@@ -111,6 +111,25 @@ async function run() {
     return;
   }
 
+  if (SCENARIO === "mixed_unrepaired" || SCENARIO === "mixed_repaired") {
+    await waitFor(
+      () => !document.getElementById("stats").classList.contains("hidden"),
+      "stats view",
+    );
+    if (SCENARIO === "mixed_unrepaired") {
+      await waitFor(() => !hidden("mixed-banner"), "mixed banner");
+    } else {
+      await sleep(600); // give the status poll time to render (or not) the banner
+    }
+    report({
+      scenario: SCENARIO,
+      bannerHidden: hidden("mixed-banner"),
+      text: document.getElementById("mixed-text").textContent,
+      command: document.getElementById("mixed-command").textContent,
+    });
+    return;
+  }
+
   if (SCENARIO === "auth_good" || SCENARIO === "auth_evil") {
     await waitFor(() => !hidden("run-auth"), "auth slot");
     const slot = document.getElementById("run-auth");

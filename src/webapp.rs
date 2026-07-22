@@ -313,6 +313,9 @@ enum DbErrorKind {
     /// The file (or a table the query needs) doesn't exist.
     MissingFile,
     MissingTable,
+    /// A column this viewer knows about is missing: the database predates a
+    /// schema migration the ingester hasn't run yet.
+    MissingColumn,
     Busy,
     Other,
 }
@@ -323,6 +326,8 @@ fn classify_db_error(err: &sqlx::Error) -> DbErrorKind {
         DbErrorKind::MissingFile
     } else if lower.contains("no such table") {
         DbErrorKind::MissingTable
+    } else if lower.contains("no such column") {
+        DbErrorKind::MissingColumn
     } else if lower.contains("database is locked") || lower.contains("database is busy") {
         DbErrorKind::Busy
     } else {
@@ -356,37 +361,47 @@ async fn build_status(state: &AppState) -> Result<serde_json::Value, sqlx::Error
             Err(err) => match classify_db_error(&err) {
                 DbErrorKind::MissingFile => {
                     return Ok(status_document(
-                        state, "missing", None, None, false, lock_held,
+                        state,
+                        "missing",
+                        None,
+                        None,
+                        MixedSources::default(),
+                        lock_held,
                     ));
                 }
-                DbErrorKind::MissingTable => "empty",
+                DbErrorKind::MissingTable | DbErrorKind::MissingColumn => "empty",
                 DbErrorKind::Busy | DbErrorKind::Other => return Err(err),
             },
         };
 
     // Run rows. An old database without ingest_runs simply has no runs; the
     // ingester creates the table on its next start.
-    let (active_run, last_run, mixed_sources) = match fetch_runs_view(&state.pool).await {
+    let (active_run, last_run) = match fetch_runs_view(&state.pool).await {
         Ok(view) => view,
         Err(err) => match classify_db_error(&err) {
-            DbErrorKind::MissingFile | DbErrorKind::MissingTable => (None, None, false),
+            DbErrorKind::MissingFile | DbErrorKind::MissingTable | DbErrorKind::MissingColumn => {
+                (None, None)
+            }
             DbErrorKind::Busy | DbErrorKind::Other => return Err(err),
         },
     };
 
+    let mixed = match fetch_mixed_sources(&state.pool).await {
+        Ok(mixed) => mixed,
+        Err(err) => match classify_db_error(&err) {
+            DbErrorKind::MissingFile | DbErrorKind::MissingTable => MixedSources::default(),
+            DbErrorKind::MissingColumn | DbErrorKind::Busy | DbErrorKind::Other => return Err(err),
+        },
+    };
+
     Ok(status_document(
-        state,
-        db,
-        active_run,
-        last_run,
-        mixed_sources,
-        lock_held,
+        state, db, active_run, last_run, mixed, lock_held,
     ))
 }
 
 async fn fetch_runs_view(
     pool: &SqlitePool,
-) -> Result<(Option<SqliteRow>, Option<SqliteRow>, bool), sqlx::Error> {
+) -> Result<(Option<SqliteRow>, Option<SqliteRow>), sqlx::Error> {
     let active = sqlx::query(
         "SELECT * FROM ingest_runs \
          WHERE state NOT IN ('done', 'failed', 'cancelled', 'abandoned') \
@@ -401,16 +416,69 @@ async fn fetch_runs_view(
     )
     .fetch_optional(pool)
     .await?;
-    // Interim mixed-sources caution (removed by Phase D's exact dedupe): true
-    // once more than one source has actually contributed rows — completed, or
-    // got far enough to add new messages before stopping.
-    let mixed: i64 = sqlx::query_scalar(
-        "SELECT COUNT(DISTINCT source) FROM ingest_runs \
-         WHERE state = 'done' OR messages_new > 0",
+    Ok((active, last))
+}
+
+/// The cross-source dedupe repair state (issue #26 Phase D).
+#[derive(Debug, Default, PartialEq, Eq)]
+struct MixedSources {
+    /// True when both seen_mails keyspaces are present (bare Gmail ids from
+    /// API scans and `mid:` rows from mbox imports) AND at least one scan row
+    /// has no recorded Message-ID — i.e. counts may still contain
+    /// cross-source duplicates that `scan --backfill-message-ids` would
+    /// collapse. Once the backfill has repaired every scan row this turns
+    /// false and the UI banner disappears.
+    mixed_unrepaired: bool,
+    /// How many API-scan rows still lack a Message-ID (the rows the backfill
+    /// would fetch). Reported for UI copy; 0 once repaired.
+    unrepaired_count: i64,
+}
+
+async fn fetch_mixed_sources(pool: &SqlitePool) -> Result<MixedSources, sqlx::Error> {
+    let result = sqlx::query(
+        "SELECT \
+           EXISTS(SELECT 1 FROM seen_mails WHERE mail_id LIKE 'mid:%') AS has_mid, \
+           EXISTS(SELECT 1 FROM seen_mails WHERE mail_id NOT LIKE 'mid:%') AS has_bare, \
+           (SELECT count(1) FROM seen_mails \
+            WHERE mail_id NOT LIKE 'mid:%' AND rfc_message_id IS NULL) AS unrepaired",
     )
     .fetch_one(pool)
-    .await?;
-    Ok((active, last, mixed >= 2))
+    .await;
+    let (has_mid, has_bare, unrepaired) = match result {
+        Ok(row) => (
+            row.try_get::<i64, _>("has_mid").unwrap_or(0) != 0,
+            row.try_get::<i64, _>("has_bare").unwrap_or(0) != 0,
+            row.try_get::<i64, _>("unrepaired").unwrap_or(0),
+        ),
+        // A pre-Phase-D database has no rfc_message_id column yet, so every
+        // scan row counts as unrepaired: running the (new) ingester binary
+        // migrates the schema, and its backfill performs the repair.
+        Err(err) if matches!(classify_db_error(&err), DbErrorKind::MissingColumn) => {
+            let row = sqlx::query(
+                "SELECT \
+                   EXISTS(SELECT 1 FROM seen_mails WHERE mail_id LIKE 'mid:%') AS has_mid, \
+                   EXISTS(SELECT 1 FROM seen_mails WHERE mail_id NOT LIKE 'mid:%') AS has_bare, \
+                   (SELECT count(1) FROM seen_mails \
+                    WHERE mail_id NOT LIKE 'mid:%') AS unrepaired",
+            )
+            .fetch_one(pool)
+            .await?;
+            (
+                row.try_get::<i64, _>("has_mid").unwrap_or(0) != 0,
+                row.try_get::<i64, _>("has_bare").unwrap_or(0) != 0,
+                row.try_get::<i64, _>("unrepaired").unwrap_or(0),
+            )
+        }
+        Err(err) => return Err(err),
+    };
+    if has_mid && has_bare && unrepaired > 0 {
+        Ok(MixedSources {
+            mixed_unrepaired: true,
+            unrepaired_count: unrepaired,
+        })
+    } else {
+        Ok(MixedSources::default())
+    }
 }
 
 fn status_document(
@@ -418,7 +486,7 @@ fn status_document(
     db: &str,
     active_run: Option<SqliteRow>,
     last_run: Option<SqliteRow>,
-    mixed_sources: bool,
+    mixed: MixedSources,
     lock_held: Option<bool>,
 ) -> serde_json::Value {
     // Viewer-derived rate/ETA from successive observations of the active
@@ -471,7 +539,8 @@ fn status_document(
         "active_run": active_run.as_ref().map(run_to_json),
         "last_run": last_run.as_ref().map(run_to_json),
         "owns_active_run": owns_active_run,
-        "mixed_sources": mixed_sources,
+        "mixed_sources": mixed.mixed_unrepaired,
+        "unrepaired_count": mixed.unrepaired_count,
         "rate_per_sec": rate_per_sec,
         "eta_seconds": eta_seconds,
         "csrf_token": state.csrf_token,
@@ -643,7 +712,7 @@ async fn build_runs(pool: &SqlitePool, limit: i64) -> Result<serde_json::Value, 
         // has no run history; this endpoint powers a strip, not a diagnosis.
         Err(err) => match classify_db_error(&err) {
             DbErrorKind::MissingFile | DbErrorKind::MissingTable => Vec::new(),
-            DbErrorKind::Busy | DbErrorKind::Other => return Err(err),
+            DbErrorKind::MissingColumn | DbErrorKind::Busy | DbErrorKind::Other => return Err(err),
         },
     };
     let runs: Vec<serde_json::Value> = rows.iter().map(run_to_json).collect();
@@ -1442,7 +1511,7 @@ mod tests {
     async fn status_with_active_and_finished_runs() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = migrated_db(&dir).await;
-        exec(&db_path, "INSERT INTO seen_mails VALUES ('m1')").await;
+        exec(&db_path, "INSERT INTO seen_mails (mail_id) VALUES ('m1')").await;
         exec(
             &db_path,
             "INSERT INTO ingest_runs \
@@ -1481,28 +1550,101 @@ mod tests {
         assert!(body["now_unix"].as_u64().unwrap() > 0);
     }
 
+    /// mixed_sources means "both keyspaces present AND at least one scan row
+    /// still lacks its Message-ID": single-source databases never trigger it,
+    /// an unrepaired mix does (with the count the UI copy needs), and a
+    /// backfilled mix does not.
     #[tokio::test]
-    async fn status_mixed_sources_flags_dual_source_databases() {
+    async fn status_mixed_sources_tracks_keyspaces_and_repair_state() {
+        // Single source (scan only), even unrepaired: not mixed.
         let dir = tempfile::tempdir().unwrap();
         let db_path = migrated_db(&dir).await;
-        exec(&db_path, "INSERT INTO seen_mails VALUES ('m1')").await;
         exec(
             &db_path,
-            "INSERT INTO ingest_runs (run_id, source, state, started_at_unix, updated_at_unix, \
-             messages_new) VALUES (1, 'gmail_api', 'done', 100, 150, 10)",
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', NULL), ('g2', NULL)",
         )
         .await;
         let (_, body) = get_json(app_for(&db_path), "/api/status").await;
         assert_eq!(body["mixed_sources"], false);
+        assert_eq!(body["unrepaired_count"], 0);
 
+        // Both keyspaces with unrepaired scan rows: mixed, count exposed.
         exec(
             &db_path,
-            "INSERT INTO ingest_runs (run_id, source, state, started_at_unix, updated_at_unix, \
-             messages_new) VALUES (2, 'mbox', 'done', 200, 250, 3)",
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('mid:<m1@example.com>', 'm1@example.com')",
         )
         .await;
         let (_, body) = get_json(app_for(&db_path), "/api/status").await;
         assert_eq!(body["mixed_sources"], true);
+        assert_eq!(body["unrepaired_count"], 2);
+
+        // Repaired (every scan row has a Message-ID or the '' sentinel for
+        // "fetched, has none"): the banner condition clears.
+        exec(
+            &db_path,
+            "UPDATE seen_mails SET rfc_message_id = 'm2@example.com' WHERE mail_id = 'g1'",
+        )
+        .await;
+        exec(
+            &db_path,
+            "UPDATE seen_mails SET rfc_message_id = '' WHERE mail_id = 'g2'",
+        )
+        .await;
+        let (_, body) = get_json(app_for(&db_path), "/api/status").await;
+        assert_eq!(body["mixed_sources"], false);
+        assert_eq!(body["unrepaired_count"], 0);
+    }
+
+    /// Import-only databases are never "mixed", repaired or not.
+    #[tokio::test]
+    async fn status_mixed_sources_false_for_import_only_databases() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = migrated_db(&dir).await;
+        exec(
+            &db_path,
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('mid:<m1@example.com>', 'm1@example.com'), ('mid:<m2@example.com>', 'm2@example.com')",
+        )
+        .await;
+        let (_, body) = get_json(app_for(&db_path), "/api/status").await;
+        assert_eq!(body["mixed_sources"], false);
+        assert_eq!(body["unrepaired_count"], 0);
+    }
+
+    /// A pre-Phase-D database (no rfc_message_id column) that mixed sources:
+    /// every scan row counts as unrepaired, and the status must not 5xx.
+    #[tokio::test]
+    async fn status_mixed_sources_handles_a_pre_phase_d_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("old.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .create_if_missing(true);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        sqlx::query("CREATE TABLE seen_mails (mail_id string)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE senders (sender string, mails_sent int)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id) VALUES \
+             ('g1'), ('g2'), ('g3'), ('mid:<m1@example.com>')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.ok();
+
+        let (status, body) = get_json(app_for(&db_path), "/api/status").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["db"], "ready");
+        assert_eq!(body["mixed_sources"], true);
+        assert_eq!(body["unrepaired_count"], 3);
     }
 
     #[tokio::test]

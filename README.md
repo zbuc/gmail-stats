@@ -29,12 +29,13 @@ Choose the **API scan** if you can OAuth and want to re-scan incrementally;
 choose the **Takeout import** if you're enrolled in Advanced Protection, don't
 want to create a Cloud project, or already have an export lying around.
 
-> **Warning: don't mix both modes into one database (yet).** The scan keys
-> messages by Gmail's internal id and the importer by RFC `Message-ID`, so a
-> message ingested by both is counted twice. Each mode on its own is fully
-> idempotent — re-running never double-counts. Cross-source dedupe is planned
-> (Phase D of [#26](https://github.com/zbuc/gmail-stats/issues/26)); until it
-> lands, use separate `--db` files if you want both.
+Both modes can share one database: messages are deduplicated across sources
+by their RFC `Message-ID` header, so scanning and importing overlapping mail
+counts each message once. One caveat for databases with scans that predate
+this dedupe (the scanner didn't record Message-IDs back then): run the
+[backfill repair pass](#repairing-cross-source-duplicates) once to fetch the
+missing Message-IDs and collapse any historical double counts. The web viewer
+shows a banner with the exact command whenever that applies.
 
 ## Option A: Gmail API scan (OAuth)
 
@@ -108,11 +109,41 @@ Resume validates that the file hasn't changed (size, mtime, content
 fingerprint); if it has, it safely falls back to re-parsing from the start,
 which stays correct thanks to the dedupe.
 
+## Repairing cross-source duplicates
+
+The scan and the import key `seen_mails` differently (Gmail's internal id vs.
+`mid:`-prefixed RFC `Message-ID`), so cross-source dedupe works through a
+shared `rfc_message_id` column: both ingesters record each message's
+normalized Message-ID and check it before counting, and a message ingested by
+both sources is counted exactly once. Messages without any Message-ID are
+simply counted per source, as before.
+
+Scans that ran before this feature existed didn't record Message-IDs, so a
+database that mixed such scans with an import may hold double counts. Repair
+it once with:
+
+```console
+$ cargo run -- scan --backfill-message-ids
+```
+
+This is a normal ingest run (it takes the same lock, writes a run row, and
+shows progress in the web viewer). It fetches just the missing `Message-ID`
+headers over the Gmail API — using the same OAuth credentials, rate limiting,
+and retries as a scan — then collapses every message found in both sources by
+decrementing the affected sender count once per duplicate. It is idempotent
+and resumable: interrupt it any time and re-run the same command to continue;
+a fully repaired database finishes immediately without touching the network.
+The web viewer's duplicate-counts banner disappears once the repair is
+complete.
+
 ## Command line
 
 ```
 gmail_stats [scan] [OPTIONS]           scan Gmail over the API (OAuth; the default)
 gmail_stats import <PATH> [OPTIONS]    import a Google Takeout mbox export
+gmail_stats scan --backfill-message-ids [OPTIONS]
+                                       fetch Message-IDs for earlier scans and collapse
+                                       cross-source duplicate counts (idempotent)
 
 --db <PATH>            SQLite database path        [env: GMAIL_STATS_DB] [default: stats.db]
 --credentials <PATH>   OAuth client secret (scan)  [env: GMAIL_STATS_CREDENTIALS] [default: credentials.json]
