@@ -8,3 +8,4 @@
 
 pub mod ingest;
 pub mod mbox;
+pub mod webapp;

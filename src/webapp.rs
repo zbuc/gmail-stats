@@ -1,41 +1,58 @@
-//! Local web viewer for gmail-stats (issue #11 Phase 1, issue #28 Phase B).
+//! Local web viewer for gmail-stats (issue #11 Phase 1, issue #28 Phase B,
+//! issue #30 Phase C).
 //!
-//! Serves the embedded UI plus read-only JSON endpoints over `./stats.db`,
-//! bound to 127.0.0.1 only. Phase B adds observe-only ingestion state:
-//! `GET /api/status` (db readiness, active/last run, flock probe, viewer-side
-//! rate/ETA, CSRF token slot) and `GET /api/runs` (run history). The viewer
-//! performs no database writes of any kind; the only file it touches is the
-//! ingest lockfile, probed without truncation via open + try-lock + release.
+//! Serves the embedded UI plus JSON endpoints over `./stats.db`, bound to
+//! 127.0.0.1 only. Phase B added observe-only ingestion state: `GET
+//! /api/status` (db readiness, active/last run, flock probe, viewer-side
+//! rate/ETA, CSRF token) and `GET /api/runs` (run history). Phase C adds the
+//! state-changing surface: `POST /api/runs` (spawn the ingester as a
+//! supervised child), `POST /api/runs/{id}/cancel` (SIGTERM the owned child,
+//! SIGKILL escalation), and `GET /api/runs/{id}/log` (in-memory stderr ring
+//! buffer of owned children).
 //!
-//! Usage: `cargo run --bin web [port]` (default port 7878), then open the
-//! printed URL. Run from the repo root so `./stats.db` resolves, or point
-//! GMAIL_STATS_DB at the database.
+//! The viewer still performs no database writes of any kind: every durable
+//! state change happens inside the spawned `gmail_stats` ingester process.
+//! The only files the viewer touches are the ingest lockfile (probed without
+//! truncation via open + try-lock + release) — its new powers are exactly
+//! spawn, signal-own-child, and hold a stderr ring buffer in memory.
+//!
+//! Every mutating route sits behind the full CSRF stack from issue #26:
+//! strict `Content-Type: application/json` (415 otherwise), the per-process
+//! `X-Gmail-Stats-Csrf` token served by `/api/status`, and Origin /
+//! Sec-Fetch-Site validation when those headers are present. No CORS headers
+//! are ever emitted.
+//!
+//! This module is the whole application; `src/bin/web.rs` is a thin `main`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
-    extract::{Query, Request, State},
-    http::{header, HeaderValue, StatusCode},
+    extract::{Path as UrlPath, Query, Request, State},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqlitePool};
+use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc;
 
-use gmail_stats::ingest;
+use crate::ingest;
 
 // CSS/JS are separate same-origin assets, not inline blocks: under the
 // `default-src 'self'` CSP below, `'self'` only allowlists same-origin URLs —
 // inline <style>/<script> would be refused by the browser.
-const INDEX_HTML: &str = include_str!("../../web/index.html");
-const APP_CSS: &str = include_str!("../../web/app.css");
-const APP_JS: &str = include_str!("../../web/app.js");
+const INDEX_HTML: &str = include_str!("../web/index.html");
+const APP_CSS: &str = include_str!("../web/app.css");
+const APP_JS: &str = include_str!("../web/app.js");
 const DEFAULT_PORT: u16 = 7878;
 
 /// How far back the in-memory rate window looks. Old observations age out so
@@ -45,23 +62,63 @@ const RATE_WINDOW: Duration = Duration::from_secs(30);
 /// reported at all; two samples a few ms apart would just be noise.
 const RATE_MIN_SPAN: Duration = Duration::from_millis(500);
 
+/// The custom header carrying the per-process CSRF token. Custom headers
+/// force a CORS preflight from cross-origin JS, which fails because this
+/// server never emits CORS headers; the random value holds even under
+/// degraded fetch-metadata support.
+const CSRF_HEADER: &str = "x-gmail-stats-csrf";
+/// Cap on the in-memory stderr ring buffer of a spawned child.
+const LOG_RING_LINES: usize = 200;
+/// Cap on a single retained stderr line (bytes), so a pathological child
+/// cannot balloon viewer memory through 200 giant lines.
+const LOG_LINE_MAX: usize = 4096;
+/// How long POST /api/runs waits for the spawned child to write its run row
+/// before giving up with spawn_failed.
+const ROW_WAIT: Duration = Duration::from_secs(10);
+/// Grace period between SIGTERM and SIGKILL on cancel.
+const TERM_GRACE: Duration = Duration::from_secs(10);
+
 /// Shared state for the router. Everything is read-only against the database;
-/// the rate window lives purely in viewer memory and is never persisted.
-struct AppState {
+/// the rate window, CSRF token, child handles, and stderr ring buffers live
+/// purely in viewer memory and are never persisted.
+pub struct AppState {
     pool: SqlitePool,
     db_path: PathBuf,
     /// Per-process CSRF token (32 bytes of CSPRNG output, hex-encoded),
-    /// minted at startup and served via /api/status. No endpoint consumes it
-    /// yet — the first state-changing routes (Phase C) will require it in a
-    /// custom header, and shipping the slot now means clients can already
-    /// learn it the intended way (same-origin GET only; a cross-origin page
-    /// cannot read this response).
+    /// minted at startup and obtainable only via the same-origin
+    /// `GET /api/status`. Required in the CSRF_HEADER of every mutating
+    /// request.
     csrf_token: String,
     rate: Mutex<RateWindow>,
+    /// Where the ingester binary lives: GMAIL_STATS_INGEST_BIN, or a sibling
+    /// of current_exe() named `gmail_stats`.
+    ingester_bin: PathBuf,
+    /// SIGTERM → SIGKILL escalation window (only tests shrink it).
+    term_grace: Duration,
+    /// Runs this viewer process spawned, by run_id. Entries persist after the
+    /// child exits so the log stays readable; they are memory-only and gone on
+    /// viewer restart (the child itself survives — kill_on_drop is false).
+    children: Mutex<HashMap<i64, Arc<OwnedRun>>>,
+    /// Serializes spawn attempts from this viewer so two racing POSTs don't
+    /// both pass the friendly pre-check. The child's own flock acquisition
+    /// remains the authoritative cross-process gate.
+    spawn_lock: tokio::sync::Mutex<()>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// The in-memory handle to a child this viewer spawned. The pid is captured
+/// from our own child handle at spawn time — never read back from the
+/// database (PID reuse) — and signals only ever travel through the supervisor
+/// task that owns the `tokio::process::Child`.
+struct OwnedRun {
+    pid: u32,
+    ring: Arc<Mutex<VecDeque<String>>>,
+    cancel_tx: mpsc::Sender<()>,
+    exited: Arc<AtomicBool>,
+}
+
+/// Entry point used by the `web` binary: parse the port argument, bind to
+/// loopback, serve.
+pub async fn serve() -> anyhow::Result<()> {
     let port: u16 = match std::env::args().nth(1) {
         Some(arg) => arg
             .parse()
@@ -83,8 +140,26 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Resolve the ingester binary: env override first, then a sibling of the
+/// current executable (both binaries come out of the same `cargo build`).
+fn default_ingester_bin() -> PathBuf {
+    if let Ok(path) = std::env::var("GMAIL_STATS_INGEST_BIN") {
+        return PathBuf::from(path);
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("gmail_stats")))
+        .unwrap_or_else(|| PathBuf::from("gmail_stats"))
+}
+
 impl AppState {
-    fn new(db_path: &Path) -> Self {
+    pub fn new(db_path: &Path) -> Self {
+        Self::configured(db_path, default_ingester_bin(), TERM_GRACE)
+    }
+
+    /// Full-control constructor for tests: a custom ingester binary (fake
+    /// ingester) and a shortened SIGTERM→SIGKILL grace.
+    pub fn configured(db_path: &Path, ingester_bin: PathBuf, term_grace: Duration) -> Self {
         // Read-only at the connection level, not by convention: the viewer
         // must not be able to touch a mid-scan DB even via a bug.
         let options = SqliteConnectOptions::new()
@@ -109,18 +184,24 @@ impl AppState {
             db_path: db_path.to_path_buf(),
             csrf_token,
             rate: Mutex::new(RateWindow::default()),
+            ingester_bin,
+            term_grace,
+            children: Mutex::new(HashMap::new()),
+            spawn_lock: tokio::sync::Mutex::new(()),
         }
     }
 }
 
-fn build_router(state: Arc<AppState>) -> Router {
+pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/app.css", get(app_css))
         .route("/app.js", get(app_js))
         .route("/api/summary", get(summary))
         .route("/api/status", get(status))
-        .route("/api/runs", get(runs))
+        .route("/api/runs", get(runs).post(start_run))
+        .route("/api/runs/{id}/cancel", post(cancel_run))
+        .route("/api/runs/{id}/log", get(run_log))
         .fallback(not_found)
         .layer(middleware::from_fn(host_guard_and_security_headers))
         .with_state(state)
@@ -369,15 +450,27 @@ fn status_document(
         }
     }
 
+    // A run is "owned" when this viewer process spawned it and still holds
+    // the in-memory child handle: only then are Cancel and Log available.
+    let owns_active_run = active_run
+        .as_ref()
+        .and_then(|row| row.try_get::<i64, _>("run_id").ok())
+        .map(|run_id| {
+            state
+                .children
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&run_id)
+        })
+        .unwrap_or(false);
+
     json!({
         "db": db,
         "now_unix": now_unix(),
         "ingest_lock_held": lock_held,
         "active_run": active_run.as_ref().map(run_to_json),
         "last_run": last_run.as_ref().map(run_to_json),
-        // Phase B never spawns anything, so no run is ever owned by the
-        // viewer; the field exists so clients already branch on it.
-        "owns_active_run": false,
+        "owns_active_run": owns_active_run,
         "mixed_sources": mixed_sources,
         "rate_per_sec": rate_per_sec,
         "eta_seconds": eta_seconds,
@@ -388,7 +481,9 @@ fn status_document(
 /// Serialize one ingest_runs row for the API. resume_token and
 /// mbox_fingerprint are internal resume bookkeeping and stay out of the
 /// payload; everything else is display data (rendered via textContent only on
-/// the client — error text and paths are not trusted).
+/// the client — error text, paths, and auth_url are not trusted; the client
+/// refuses to hyperlink auth_url unless it parses as
+/// https://accounts.google.com/...).
 fn run_to_json(row: &SqliteRow) -> serde_json::Value {
     fn i(row: &SqliteRow, col: &str) -> Option<i64> {
         row.try_get::<Option<i64>, _>(col).unwrap_or(None)
@@ -412,6 +507,7 @@ fn run_to_json(row: &SqliteRow) -> serde_json::Value {
         "mbox_path": s(row, "mbox_path"),
         "error_kind": s(row, "error_kind"),
         "error": s(row, "error"),
+        "auth_url": s(row, "auth_url"),
     })
 }
 
@@ -552,6 +648,558 @@ async fn build_runs(pool: &SqlitePool, limit: i64) -> Result<serde_json::Value, 
     };
     let runs: Vec<serde_json::Value> = rows.iter().map(run_to_json).collect();
     Ok(json!({ "runs": runs, "now_unix": now_unix() }))
+}
+
+// ---------------------------------------------------------------------------
+// Phase C: mutating routes (POST /api/runs, POST /api/runs/{id}/cancel) and
+// the owned-child log (GET /api/runs/{id}/log)
+// ---------------------------------------------------------------------------
+
+fn json_error(status: StatusCode, kind: &str, message: &str) -> Response {
+    (status, Json(json!({ "error": kind, "message": message }))).into_response()
+}
+
+/// Constant-time byte comparison for the CSRF token, so the check leaks no
+/// prefix-length timing signal.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Is this Origin header value an allowed same-machine origin? Only
+/// `http://127.0.0.1[:port]` and `http://localhost[:port]` qualify — the port
+/// is not pinned (mirroring the Host guard: any loopback-origin page served
+/// to this browser is the same local user, and the token check is the
+/// unforgeable layer).
+fn origin_allowed(origin: &str) -> bool {
+    let Some(rest) = origin.strip_prefix("http://") else {
+        return false;
+    };
+    let (host, port) = match rest.split_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (rest, None),
+    };
+    if host != "127.0.0.1" && host != "localhost" {
+        return false;
+    }
+    match port {
+        None => true,
+        Some(port) => !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()),
+    }
+}
+
+/// The three-layer CSRF gate from issue #26, applied to every mutating route
+/// (all three layers required):
+///
+/// 1. Strict `Content-Type: application/json`, else 415. HTML forms cannot
+///    produce it, and cross-origin JS that sets it triggers a CORS preflight
+///    that fails because this server never emits CORS headers.
+/// 2. `X-Gmail-Stats-Csrf` must equal the per-process CSPRNG token, which is
+///    obtainable only via the same-origin `GET /api/status`.
+/// 3. If `Origin` is present it must be a loopback http origin; if
+///    `Sec-Fetch-Site` is present it must be `same-origin` or `none`. Absent
+///    headers pass: curl is the same local user, who can already run the CLI.
+// The Err variant is a full HTTP Response by design (it is sent as-is);
+// boxing it would just add noise on a cold path.
+#[allow(clippy::result_large_err)]
+fn check_csrf(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    let essence = content_type.split(';').next().unwrap_or("").trim();
+    if !essence.eq_ignore_ascii_case("application/json") {
+        return Err(json_error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "content_type",
+            "Content-Type must be application/json",
+        ));
+    }
+
+    let presented = headers
+        .get(CSRF_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if !constant_time_eq(presented.as_bytes(), state.csrf_token.as_bytes()) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "csrf",
+            "missing or invalid X-Gmail-Stats-Csrf token (fetch it from GET /api/status)",
+        ));
+    }
+
+    if let Some(origin) = headers.get(header::ORIGIN) {
+        let allowed = origin.to_str().is_ok_and(origin_allowed);
+        if !allowed {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "csrf",
+                "cross-origin requests are not allowed",
+            ));
+        }
+    }
+    if let Some(site) = headers.get("sec-fetch-site") {
+        let allowed = matches!(site.to_str(), Ok("same-origin") | Ok("none"));
+        if !allowed {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "csrf",
+                "cross-site requests are not allowed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// What POST /api/runs decided to launch. Argv is assembled from these fields
+/// as a fixed array — never a shell — and the only user-influenced element is
+/// a single already-validated path argument.
+enum SpawnPlan {
+    Scan { resume: Option<i64> },
+    Import { path: PathBuf, resume: Option<i64> },
+}
+
+/// Stat-level mbox validation (UX, not a security boundary): absolute,
+/// regular, readable, and starting with the mbox `From ` magic so a confused
+/// click can't slurp an arbitrary file into sender stats.
+fn validate_mbox_path(raw: &str) -> Result<PathBuf, String> {
+    use std::io::Read;
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(
+            "path must be absolute (browsers do not reveal picked-file paths; \
+                    paste the full path)"
+                .to_string(),
+        );
+    }
+    let meta = match std::fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let mut file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(e) => return Err(format!("cannot open {}: {e}", path.display())),
+    };
+    let mut magic = [0u8; 5];
+    if file.read_exact(&mut magic).is_err() || &magic != b"From " {
+        return Err(format!(
+            "{} does not look like an mbox file (expected it to start with a `From ` separator)",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+async fn start_run(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(response) = check_csrf(&state, &headers) {
+        return response;
+    }
+    let parsed: serde_json::Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "bad_request", "body must be JSON"),
+    };
+    let resume_run_id = parsed["resume_run_id"].as_i64();
+    let plan = match parsed["source"].as_str() {
+        Some("gmail_api") => {
+            if let Some(run_id) = resume_run_id {
+                // The scanner enforces this too; checking here turns a typo
+                // into a friendly 422 instead of a failed spawn.
+                match run_source(&state.pool, run_id).await {
+                    Some(source) if source == "gmail_api" => {}
+                    Some(source) => {
+                        return json_error(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "bad_resume",
+                            &format!("run {run_id} is a {source} run, not a Gmail API scan"),
+                        )
+                    }
+                    None => {
+                        return json_error(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "bad_resume",
+                            &format!("no ingest run {run_id} to resume"),
+                        )
+                    }
+                }
+            }
+            SpawnPlan::Scan {
+                resume: resume_run_id,
+            }
+        }
+        Some("mbox") => {
+            let raw_path = match (parsed["path"].as_str(), resume_run_id) {
+                (Some(path), _) => path.to_string(),
+                (None, Some(run_id)) => match run_mbox_path(&state.pool, run_id).await {
+                    Some(path) => path,
+                    None => {
+                        return json_error(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            "bad_resume",
+                            &format!("run {run_id} is not a resumable mbox import"),
+                        )
+                    }
+                },
+                (None, None) => {
+                    return json_error(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "bad_path",
+                        "mbox imports need a \"path\" (or a \"resume_run_id\")",
+                    )
+                }
+            };
+            match validate_mbox_path(&raw_path) {
+                Ok(path) => SpawnPlan::Import {
+                    path,
+                    resume: resume_run_id,
+                },
+                Err(message) => {
+                    return json_error(StatusCode::UNPROCESSABLE_ENTITY, "bad_path", &message)
+                }
+            }
+        }
+        _ => {
+            return json_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bad_source",
+                "source must be \"gmail_api\" or \"mbox\"",
+            )
+        }
+    };
+
+    // Serialize spawns from this viewer; then the friendly pre-check. The
+    // child's own flock acquisition is the authoritative gate, so the
+    // remaining TOCTOU window is harmless (it surfaces as run_active below).
+    let _guard = state.spawn_lock.lock().await;
+    if probe_ingest_lock(&state.db_path) == Some(true) {
+        return json_error(
+            StatusCode::CONFLICT,
+            "run_active",
+            "an ingester is already running against this database",
+        );
+    }
+    if !state.ingester_bin.is_file() {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "spawn_failed",
+            &format!(
+                "ingester binary not found at {} — build it with `cargo build`, \
+                 or point GMAIL_STATS_INGEST_BIN at it",
+                state.ingester_bin.display()
+            ),
+        );
+    }
+
+    match spawn_and_register(&state, &plan).await {
+        Ok(run_id) => (StatusCode::ACCEPTED, Json(json!({ "run_id": run_id }))).into_response(),
+        Err(response) => response,
+    }
+}
+
+async fn run_source(pool: &SqlitePool, run_id: i64) -> Option<String> {
+    sqlx::query_scalar::<_, String>("SELECT source FROM ingest_runs WHERE run_id = ?")
+        .bind(run_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+}
+
+async fn run_mbox_path(pool: &SqlitePool, run_id: i64) -> Option<String> {
+    sqlx::query_scalar::<_, Option<String>>(
+        "SELECT mbox_path FROM ingest_runs WHERE run_id = ? AND source = 'mbox'",
+    )
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+async fn max_run_id(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(run_id) FROM ingest_runs")
+        .fetch_one(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
+async fn find_new_run(pool: &SqlitePool, after: i64, pid: u32) -> Option<i64> {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT run_id FROM ingest_runs WHERE run_id > ? AND pid = ? \
+         ORDER BY run_id DESC LIMIT 1",
+    )
+    .bind(after)
+    .bind(pid as i64)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+fn push_log_line(ring: &Mutex<VecDeque<String>>, mut line: String) {
+    if line.len() > LOG_LINE_MAX {
+        let mut cut = LOG_LINE_MAX;
+        while !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        line.truncate(cut);
+    }
+    let mut ring = ring.lock().unwrap_or_else(|e| e.into_inner());
+    if ring.len() == LOG_RING_LINES {
+        ring.pop_front();
+    }
+    ring.push_back(line);
+}
+
+/// Spawn the ingester with a fixed argv (never a shell), wire up stderr
+/// capture and the supervisor, wait for the child to write its run row, and
+/// register ownership. Returns the run_id for the 202 body.
+#[allow(clippy::result_large_err)] // the Err is the HTTP response, sent as-is
+async fn spawn_and_register(state: &AppState, plan: &SpawnPlan) -> Result<i64, Response> {
+    let before = max_run_id(&state.pool).await;
+    // Absolute db path: the child inherits our cwd today, but the argv should
+    // not depend on that staying true.
+    let db_abs = std::path::absolute(&state.db_path).unwrap_or_else(|_| state.db_path.clone());
+
+    let mut cmd = tokio::process::Command::new(&state.ingester_bin);
+    match plan {
+        SpawnPlan::Scan { resume } => {
+            cmd.arg("scan");
+            if let Some(run_id) = resume {
+                cmd.arg("--resume").arg(run_id.to_string());
+            }
+        }
+        SpawnPlan::Import { path, resume } => {
+            cmd.arg("import").arg(path);
+            if let Some(run_id) = resume {
+                cmd.arg("--resume").arg(run_id.to_string());
+            }
+        }
+    }
+    cmd.arg("--quiet")
+        .arg("--db")
+        .arg(&db_abs)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        // The run must survive a viewer restart: the child is reparented and
+        // keeps writing; only Cancel and Log are lost.
+        .kill_on_drop(false);
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "spawn_failed",
+                &format!(
+                    "could not launch {}: {e} — build it with `cargo build`",
+                    state.ingester_bin.display()
+                ),
+            ))
+        }
+    };
+    let Some(pid) = child.id() else {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "spawn_failed",
+            "child exited before it could be observed",
+        ));
+    };
+
+    let ring = Arc::new(Mutex::new(VecDeque::new()));
+    let exited = Arc::new(AtomicBool::new(false));
+    let (cancel_tx, cancel_rx) = mpsc::channel::<()>(1);
+
+    // stderr → bounded in-memory ring buffer; never persisted anywhere.
+    if let Some(stderr) = child.stderr.take() {
+        let ring = ring.clone();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                push_log_line(&ring, line);
+            }
+        });
+    }
+    tokio::spawn(supervise_child(
+        child,
+        cancel_rx,
+        exited.clone(),
+        state.term_grace,
+    ));
+
+    // The 202 contract includes the run_id, which the *child* mints by
+    // inserting its run row; wait for it to appear (matched by our child's
+    // pid, newer than anything that existed before the spawn).
+    let deadline = Instant::now() + ROW_WAIT;
+    loop {
+        if let Some(run_id) = find_new_run(&state.pool, before, pid).await {
+            let owned = Arc::new(OwnedRun {
+                pid,
+                ring,
+                cancel_tx,
+                exited,
+            });
+            state
+                .children
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(run_id, owned);
+            return Ok(run_id);
+        }
+        if exited.load(Ordering::Relaxed) {
+            // One more look: a tiny import can legitimately finish before the
+            // first poll tick.
+            if let Some(run_id) = find_new_run(&state.pool, before, pid).await {
+                let owned = Arc::new(OwnedRun {
+                    pid,
+                    ring,
+                    cancel_tx,
+                    exited,
+                });
+                state
+                    .children
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(run_id, owned);
+                return Ok(run_id);
+            }
+            let tail: String = {
+                let ring = ring.lock().unwrap_or_else(|e| e.into_inner());
+                ring.iter()
+                    .rev()
+                    .take(5)
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            };
+            // The authoritative flock gate lost a race we pre-checked: the
+            // child refused to run because another ingester holds the lock.
+            if tail.contains("another ingester is already running") {
+                return Err(json_error(
+                    StatusCode::CONFLICT,
+                    "run_active",
+                    "an ingester is already running against this database",
+                ));
+            }
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "spawn_failed",
+                &format!("the ingester exited before reporting a run: {tail}"),
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "spawn_failed",
+                "the ingester started but never reported a run row",
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Owns the `tokio::process::Child`. Normally just reaps it; on a cancel
+/// request it SIGTERMs the child (clean drain + `cancelled` row, exactly like
+/// terminal Ctrl-C), escalating to SIGKILL after the grace period. A
+/// SIGKILLed child leaves its row open; the next ingester's janitor marks it
+/// abandoned — the viewer itself never writes to the database.
+async fn supervise_child(
+    mut child: tokio::process::Child,
+    mut cancel_rx: mpsc::Receiver<()>,
+    exited: Arc<AtomicBool>,
+    grace: Duration,
+) {
+    let pid = child.id();
+    tokio::select! {
+        _ = child.wait() => {}
+        Some(()) = cancel_rx.recv() => {
+            // The pid comes from our own child handle at spawn, never from
+            // the database.
+            if let Some(pid) = pid.and_then(|p| rustix::process::Pid::from_raw(p as i32)) {
+                let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+            }
+            if tokio::time::timeout(grace, child.wait()).await.is_err() {
+                // SIGTERM ignored: SIGKILL and reap.
+                let _ = child.kill().await;
+            }
+        }
+    }
+    exited.store(true, Ordering::Relaxed);
+}
+
+async fn cancel_run(
+    State(state): State<Arc<AppState>>,
+    UrlPath(run_id): UrlPath<i64>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = check_csrf(&state, &headers) {
+        return response;
+    }
+    let owned = state
+        .children
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&run_id)
+        .cloned();
+    match owned {
+        None => json_error(
+            StatusCode::CONFLICT,
+            "not_owned",
+            "this viewer did not start that run — cancel it from its own terminal (Ctrl-C)",
+        ),
+        Some(run) => {
+            // Idempotent: repeated cancels (or cancelling an already-exited
+            // child) are no-ops.
+            let _ = run.cancel_tx.try_send(());
+            (
+                StatusCode::ACCEPTED,
+                Json(json!({ "run_id": run_id, "cancelling": true })),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn run_log(State(state): State<Arc<AppState>>, UrlPath(run_id): UrlPath<i64>) -> Response {
+    let owned = state
+        .children
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&run_id)
+        .cloned();
+    match owned {
+        None => json_error(
+            StatusCode::NOT_FOUND,
+            "not_owned",
+            "no in-memory log for that run (it was started elsewhere, or the viewer restarted)",
+        ),
+        Some(run) => {
+            let lines: Vec<String> = {
+                let ring = run.ring.lock().unwrap_or_else(|e| e.into_inner());
+                ring.iter().cloned().collect()
+            };
+            Json(json!({
+                "run_id": run_id,
+                "pid": run.pid,
+                "exited": run.exited.load(Ordering::Relaxed),
+                "lines": lines,
+            }))
+            .into_response()
+        }
+    }
 }
 
 fn now_unix() -> u64 {
@@ -983,6 +1631,77 @@ mod tests {
         // And two distinct viewer processes mint distinct tokens.
         let other = Arc::new(AppState::new(&db_path));
         assert_ne!(state.csrf_token, other.csrf_token);
+    }
+
+    #[test]
+    fn origin_allowlist_is_loopback_http_only() {
+        for good in [
+            "http://127.0.0.1:7878",
+            "http://127.0.0.1",
+            "http://localhost:7878",
+            "http://localhost",
+            "http://localhost:1",
+        ] {
+            assert!(origin_allowed(good), "{good} should be allowed");
+        }
+        for bad in [
+            "https://127.0.0.1:7878",
+            "https://accounts.google.com",
+            "http://evil.example",
+            "http://127.0.0.1.evil.example",
+            "http://localhost:",
+            "http://localhost:7878/path",
+            "http://localhost:78x8",
+            "null",
+            "",
+        ] {
+            assert!(!origin_allowed(bad), "{bad} must be rejected");
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_compares_correctly() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"ab"));
+        assert!(!constant_time_eq(b"", b"a"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn mbox_path_validation_is_stat_plus_magic_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("mail.mbox");
+        std::fs::write(&good, b"From a@example.com\nFrom: a@example.com\n\nhi\n").unwrap();
+        assert_eq!(validate_mbox_path(good.to_str().unwrap()).unwrap(), good);
+
+        let not_mbox = dir.path().join("notes.txt");
+        std::fs::write(&not_mbox, b"not mail").unwrap();
+        for (raw, expected) in [
+            ("relative/mail.mbox", "absolute"),
+            (
+                dir.path().join("missing.mbox").to_str().unwrap(),
+                "cannot read",
+            ),
+            (dir.path().to_str().unwrap(), "not a regular file"),
+            (not_mbox.to_str().unwrap(), "does not look like an mbox"),
+        ] {
+            let err = validate_mbox_path(raw).unwrap_err();
+            assert!(err.contains(expected), "{raw}: {err}");
+        }
+    }
+
+    #[test]
+    fn log_ring_caps_lines_and_line_length() {
+        let ring = Mutex::new(VecDeque::new());
+        for i in 0..(LOG_RING_LINES + 30) {
+            push_log_line(&ring, format!("line {i}"));
+        }
+        push_log_line(&ring, "x".repeat(LOG_LINE_MAX + 100));
+        let ring = ring.lock().unwrap();
+        assert_eq!(ring.len(), LOG_RING_LINES);
+        assert_eq!(ring.front().unwrap(), "line 31");
+        assert_eq!(ring.back().unwrap().len(), LOG_LINE_MAX);
     }
 
     #[test]
