@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
 use google_gmail1::api::Message;
@@ -65,55 +66,157 @@ async fn main() -> anyhow::Result<()> {
         auth,
     );
 
-    // Some kind of exponential backpressure on a worker would be nicer
-    let retries = 0;
+    // Retry transient failures with exponential backoff; fail fast on everything else.
+    let mut retries = 0;
+    let mut resume_token: Option<String> = None;
     loop {
-        // TODO: lol handle these better, i keep getting deadlocks but wanna just churn some emails
-        // retries += 1;
-        if retries > 3 {
-            panic!("Too many retries");
+        let token_before_attempt = resume_token.clone();
+        match work(&pool, &mut hub, &mut resume_token).await {
+            Ok(()) => break,
+            Err(err) if !is_transient(&err) => {
+                return Err(err.context("giving up: error is not retryable"));
+            }
+            Err(err) => {
+                // If this attempt advanced the resume point (i.e. fully processed
+                // at least one page) before failing, the previous errors were
+                // intermittent, not persistent — start the budget over so
+                // MAX_RETRIES bounds *consecutive* failures, not failures
+                // accumulated over the whole run.
+                if resume_token != token_before_attempt {
+                    retries = 0;
+                }
+                retries += 1;
+                if retries > MAX_RETRIES {
+                    return Err(err.context(format!("giving up after {MAX_RETRIES} retries")));
+                }
+                let delay = backoff_delay(retries);
+                println!(
+                    "Transient error (attempt {retries}/{MAX_RETRIES}), retrying in {delay:?}: {err:?}"
+                );
+                tokio::time::sleep(delay).await;
+            }
         }
-
-        let res = work(&pool, &mut hub).await;
-        if res.is_ok() {
-            break;
-        }
-
-        println!("Error encountered, retrying: {:?}", res);
     }
 
     Ok(())
 }
 
-async fn work(pool: &Pool<Sqlite>, hub: &mut GmailHub) -> anyhow::Result<()> {
-    // Fetch 500 messages at a time...
-    let result = hub
-        .users()
-        .messages_list("me")
-        .max_results(500)
-        .include_spam_trash(false)
-        .doit()
-        .await?;
+const MAX_RETRIES: u32 = 3;
 
-    let mut next_page_token = result.1.next_page_token;
+/// Exponential backoff (1s, 2s, 4s, ... capped at 32s) plus up to 1s of jitter.
+fn backoff_delay(attempt: u32) -> Duration {
+    let base = Duration::from_secs(1 << attempt.saturating_sub(1).min(5));
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_millis()))
+        .unwrap_or(0);
+    base + Duration::from_millis(jitter_ms)
+}
 
-    parse_messages(pool, result.1.messages.unwrap_or_default(), hub).await?;
+/// Only transient failures are worth retrying: SQLite busy/locked (the deadlocks
+/// that motivated the retry loop) and Gmail API rate limits / server errors.
+/// Auth failures, other 4xx responses, IO errors, etc. fail fast.
+fn is_transient(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
+            return match sqlx_err {
+                sqlx::Error::Database(db_err) => {
+                    // SQLITE_BUSY (5) and SQLITE_LOCKED (6); extended result codes
+                    // (e.g. SQLITE_BUSY_SNAPSHOT = 517) keep the primary code in
+                    // the low byte.
+                    db_err
+                        .code()
+                        .and_then(|code| code.parse::<i64>().ok())
+                        .is_some_and(|code| matches!(code & 0xff, 5 | 6))
+                }
+                // Timed out waiting for a pool connection while the DB is busy.
+                sqlx::Error::PoolTimedOut => true,
+                _ => false,
+            };
+        }
+        if let Some(gmail_err) = cause.downcast_ref::<google_gmail1::Error>() {
+            return match gmail_err {
+                // Non-success HTTP responses whose body parses as Google's JSON
+                // error envelope (the normal case for Gmail 429s and 5xxs) are
+                // surfaced as `BadRequest(value)`, not `Failure`; the HTTP
+                // status is the numeric `error.code` field in the envelope.
+                google_gmail1::Error::BadRequest(value) => {
+                    match value
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        Some(code) if code == 429 || (500..=599).contains(&code) => true,
+                        // Gmail delivers per-user rate limiting as 403 too
+                        // (usageLimits domain, reason `rateLimitExceeded` /
+                        // `userRateLimitExceeded`); Google's error guide says to
+                        // retry those with backoff. Other 403s (e.g.
+                        // `insufficientPermissions`, `dailyLimitExceeded`) are
+                        // genuinely fatal and fail fast.
+                        Some(403) => is_rate_limit_envelope(value),
+                        _ => false,
+                    }
+                }
+                // Non-JSON error responses (e.g. an HTML 502 from a proxy).
+                google_gmail1::Error::Failure(response) => {
+                    let status = response.status();
+                    status.as_u16() == 429 || status.is_server_error()
+                }
+                _ => false,
+            };
+        }
+    }
+    false
+}
 
-    while let Some(token) = next_page_token {
-        let result = hub
+/// True when a Google JSON error envelope describes a retryable rate-limit
+/// condition: `error.errors[*].reason` of `rateLimitExceeded` /
+/// `userRateLimitExceeded`, or `error.status` of `RESOURCE_EXHAUSTED`.
+fn is_rate_limit_envelope(value: &serde_json::Value) -> bool {
+    let reason_is_rate_limit = value
+        .pointer("/error/errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|errors| {
+            errors.iter().any(|e| {
+                matches!(
+                    e.get("reason").and_then(serde_json::Value::as_str),
+                    Some("rateLimitExceeded" | "userRateLimitExceeded")
+                )
+            })
+        });
+    reason_is_rate_limit
+        || value
+            .pointer("/error/status")
+            .and_then(serde_json::Value::as_str)
+            == Some("RESOURCE_EXHAUSTED")
+}
+
+async fn work(
+    pool: &Pool<Sqlite>,
+    hub: &mut GmailHub,
+    resume_token: &mut Option<String>,
+) -> anyhow::Result<()> {
+    // Fetch 500 messages at a time, starting from the last page we fully
+    // processed (so a retry doesn't re-list the whole mailbox from page one).
+    loop {
+        let mut call = hub
             .users()
             .messages_list("me")
             .max_results(500)
-            .include_spam_trash(false)
-            .page_token(&token)
-            .doit()
-            .await?;
+            .include_spam_trash(false);
+        if let Some(token) = resume_token.as_deref() {
+            call = call.page_token(token);
+        }
+        let result = call.doit().await?;
 
-        next_page_token = result.1.next_page_token;
+        let next_page_token = result.1.next_page_token;
         parse_messages(pool, result.1.messages.unwrap_or_default(), hub).await?;
-    }
 
-    Ok(())
+        // Only advance the resume point once the page has been fully processed.
+        *resume_token = next_page_token;
+        if resume_token.is_none() {
+            return Ok(());
+        }
+    }
 }
 
 async fn parse_messages(
@@ -273,4 +376,80 @@ fn get_sender(message: &Message) -> anyhow::Result<String> {
 
     println!("weird email without from header: {:?}", message.id);
     Ok(String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient;
+    use serde_json::json;
+
+    fn envelope(code: u64) -> anyhow::Error {
+        // Google's standard JSON error envelope, as parsed into
+        // `google_gmail1::Error::BadRequest` by the generated doit() code.
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": code, "message": "boom", "status": "UNKNOWN" }
+        })))
+    }
+
+    #[test]
+    fn json_429_and_5xx_are_transient() {
+        assert!(is_transient(&envelope(429)));
+        assert!(is_transient(&envelope(500)));
+        assert!(is_transient(&envelope(503)));
+    }
+
+    #[test]
+    fn json_4xx_other_than_429_is_not_transient() {
+        assert!(!is_transient(&envelope(400)));
+        assert!(!is_transient(&envelope(401)));
+        assert!(!is_transient(&envelope(403)));
+        assert!(!is_transient(&envelope(404)));
+    }
+
+    fn envelope_403(reason: &str) -> anyhow::Error {
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": {
+                "code": 403,
+                "message": "boom",
+                "errors": [
+                    { "domain": "usageLimits", "reason": reason, "message": "boom" }
+                ]
+            }
+        })))
+    }
+
+    #[test]
+    fn json_403_rate_limit_reasons_are_transient() {
+        assert!(is_transient(&envelope_403("rateLimitExceeded")));
+        assert!(is_transient(&envelope_403("userRateLimitExceeded")));
+    }
+
+    #[test]
+    fn json_403_resource_exhausted_status_is_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": 403, "message": "boom", "status": "RESOURCE_EXHAUSTED" }
+        })));
+        assert!(is_transient(&err));
+    }
+
+    #[test]
+    fn json_403_non_rate_limit_reasons_are_not_transient() {
+        assert!(!is_transient(&envelope_403("insufficientPermissions")));
+        assert!(!is_transient(&envelope_403("dailyLimitExceeded")));
+        assert!(!is_transient(&envelope_403("domainPolicy")));
+    }
+
+    #[test]
+    fn bad_request_without_error_code_is_not_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "message": "no envelope here"
+        })));
+        assert!(!is_transient(&err));
+    }
+
+    #[test]
+    fn transient_cause_is_found_through_context_chain() {
+        let err = envelope(429).context("while listing messages");
+        assert!(is_transient(&err));
+    }
 }
