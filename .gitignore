@@ -1,6 +1,7 @@
 /target
 tokencache.json
 stats.db*
+*.ingest.lock
 credentials.json
 *.swp
 _site/
