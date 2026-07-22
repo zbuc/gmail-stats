@@ -176,27 +176,26 @@ async fn build_summary(pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Err
 fn error_response(err: &sqlx::Error) -> Response {
     let detail = err.to_string();
     let lower = detail.to_lowercase();
-    let (status, kind, message) = if lower.contains("unable to open database file")
-        || lower.contains("no such table")
-    {
-        (
+    let (status, kind, message) =
+        if lower.contains("unable to open database file") || lower.contains("no such table") {
+            (
             StatusCode::SERVICE_UNAVAILABLE,
             "missing_db",
             "stats.db (or its tables) not found — set up the database and run the scanner first",
         )
-    } else if lower.contains("database is locked") || lower.contains("database is busy") {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "busy",
-            "database busy — scanner is writing, retry shortly",
-        )
-    } else {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal",
-            "internal error",
-        )
-    };
+        } else if lower.contains("database is locked") || lower.contains("database is busy") {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "busy",
+                "database busy — scanner is writing, retry shortly",
+            )
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal",
+                "internal error",
+            )
+        };
     (
         status,
         Json(json!({ "error": kind, "message": message, "detail": detail })),
