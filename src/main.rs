@@ -70,12 +70,21 @@ async fn main() -> anyhow::Result<()> {
     let mut retries = 0;
     let mut resume_token: Option<String> = None;
     loop {
+        let token_before_attempt = resume_token.clone();
         match work(&pool, &mut hub, &mut resume_token).await {
             Ok(()) => break,
             Err(err) if !is_transient(&err) => {
                 return Err(err.context("giving up: error is not retryable"));
             }
             Err(err) => {
+                // If this attempt advanced the resume point (i.e. fully processed
+                // at least one page) before failing, the previous errors were
+                // intermittent, not persistent — start the budget over so
+                // MAX_RETRIES bounds *consecutive* failures, not failures
+                // accumulated over the whole run.
+                if resume_token != token_before_attempt {
+                    retries = 0;
+                }
                 retries += 1;
                 if retries > MAX_RETRIES {
                     return Err(err.context(format!("giving up after {MAX_RETRIES} retries")));
@@ -127,6 +136,15 @@ fn is_transient(err: &anyhow::Error) -> bool {
         }
         if let Some(gmail_err) = cause.downcast_ref::<google_gmail1::Error>() {
             return match gmail_err {
+                // Non-success HTTP responses whose body parses as Google's JSON
+                // error envelope (the normal case for Gmail 429s and 5xxs) are
+                // surfaced as `BadRequest(value)`, not `Failure`; the HTTP
+                // status is the numeric `error.code` field in the envelope.
+                google_gmail1::Error::BadRequest(value) => value
+                    .pointer("/error/code")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|code| code == 429 || (500..=599).contains(&code)),
+                // Non-JSON error responses (e.g. an HTML 502 from a proxy).
                 google_gmail1::Error::Failure(response) => {
                     let status = response.status();
                     status.as_u16() == 429 || status.is_server_error()
@@ -355,4 +373,47 @@ fn get_sender(message: &Message) -> anyhow::Result<String> {
         .as_ref()
         .expect("expected sender for mail")
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_transient;
+    use serde_json::json;
+
+    fn envelope(code: u64) -> anyhow::Error {
+        // Google's standard JSON error envelope, as parsed into
+        // `google_gmail1::Error::BadRequest` by the generated doit() code.
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": code, "message": "boom", "status": "UNKNOWN" }
+        })))
+    }
+
+    #[test]
+    fn json_429_and_5xx_are_transient() {
+        assert!(is_transient(&envelope(429)));
+        assert!(is_transient(&envelope(500)));
+        assert!(is_transient(&envelope(503)));
+    }
+
+    #[test]
+    fn json_4xx_other_than_429_is_not_transient() {
+        assert!(!is_transient(&envelope(400)));
+        assert!(!is_transient(&envelope(401)));
+        assert!(!is_transient(&envelope(403)));
+        assert!(!is_transient(&envelope(404)));
+    }
+
+    #[test]
+    fn bad_request_without_error_code_is_not_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "message": "no envelope here"
+        })));
+        assert!(!is_transient(&err));
+    }
+
+    #[test]
+    fn transient_cause_is_found_through_context_chain() {
+        let err = envelope(429).context("while listing messages");
+        assert!(is_transient(&err));
+    }
 }
