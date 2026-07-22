@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gmail-stats</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --muted: #6b6b6b;
+    --card: #ffffff;
+    --border: #e2e2e2;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --fg: #e8e8e8;
+      --muted: #9a9a9a;
+      --card: #1f2229;
+      --border: #33363e;
+      --accent: #7aa2f7;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+  h1 { font-size: 1.4rem; margin: 0 0 1rem; }
+  h1 span { color: var(--muted); font-weight: normal; font-size: 1rem; }
+  .hidden { display: none; }
+  .muted { color: var(--muted); }
+
+  .tiles { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.5rem; }
+  .tile {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    min-width: 10rem;
+    flex: 1 1 10rem;
+  }
+  .tile .label { font-size: 0.8rem; color: var(--muted); }
+  .tile .value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .tile .value.small { font-size: 1.05rem; }
+
+  table { width: 100%; border-collapse: collapse; background: var(--card);
+          border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 0.45rem 0.75rem; border-top: 1px solid var(--border); }
+  thead th { border-top: none; background: var(--card); font-size: 0.8rem;
+             text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.sender { overflow-wrap: anywhere; }
+
+  .notice {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+  }
+  .notice h2 { margin-top: 0; font-size: 1.1rem; }
+  pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-size: 0.85rem;
+  }
+  button {
+    font: inherit;
+    color: var(--fg);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.35rem 0.9rem;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>gmail-stats <span>· local viewer</span></h1>
+
+  <section id="loading">
+    <p class="muted">Loading&hellip;</p>
+  </section>
+
+  <section id="setup" class="notice hidden">
+    <h2>No stats database found</h2>
+    <p>The viewer reads <code>./stats.db</code> from the directory it was started in,
+       but the database (or its tables) doesn't exist yet.</p>
+    <p>Create the tables, then run the scanner from the repo root:</p>
+    <pre>$ sqlite3 stats.db
+sqlite&gt; CREATE TABLE seen_mails (mail_id string);
+sqlite&gt; CREATE TABLE senders (sender string, mails_sent int);
+sqlite&gt; .quit
+$ cargo run</pre>
+    <p>When the scan finishes (or while it runs), come back here.</p>
+    <button id="retry-setup" type="button">Retry</button>
+  </section>
+
+  <section id="error" class="notice hidden">
+    <h2>Something went wrong</h2>
+    <p id="error-message"></p>
+    <button id="retry-error" type="button">Retry</button>
+  </section>
+
+  <section id="stats" class="hidden">
+    <div class="tiles">
+      <div class="tile">
+        <div class="label">Total messages</div>
+        <div class="value" id="total-messages"></div>
+      </div>
+      <div class="tile">
+        <div class="label">Distinct senders</div>
+        <div class="value" id="distinct-senders"></div>
+      </div>
+      <div class="tile">
+        <div class="label">Top sender</div>
+        <div class="value small" id="top-sender"></div>
+      </div>
+    </div>
+    <table>
+      <thead>
+        <tr><th>Sender</th><th class="num">Messages</th></tr>
+      </thead>
+      <tbody id="sender-rows"></tbody>
+    </table>
+    <p class="muted" id="generated-at"></p>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// Sender strings come from arbitrary From: headers and are attacker-controlled.
+// This page only ever renders them via textContent — never innerHTML.
+
+const views = ["loading", "setup", "error", "stats"];
+
+function showView(name) {
+  for (const id of views) {
+    document.getElementById(id).classList.toggle("hidden", id !== name);
+  }
+}
+
+function showError(message) {
+  document.getElementById("error-message").textContent = message;
+  showView("error");
+}
+
+function render(data) {
+  const senders = Array.isArray(data.senders) ? data.senders : [];
+
+  document.getElementById("total-messages").textContent =
+    Number(data.total_messages || 0).toLocaleString();
+  document.getElementById("distinct-senders").textContent =
+    senders.length.toLocaleString();
+  document.getElementById("top-sender").textContent =
+    senders.length > 0 ? senders[0].sender : "—";
+
+  const tbody = document.getElementById("sender-rows");
+  tbody.replaceChildren();
+  for (const row of senders) {
+    const tr = document.createElement("tr");
+    const senderCell = document.createElement("td");
+    senderCell.className = "sender";
+    senderCell.textContent = row.sender;
+    const countCell = document.createElement("td");
+    countCell.className = "num";
+    countCell.textContent = Number(row.mails_sent || 0).toLocaleString();
+    tr.append(senderCell, countCell);
+    tbody.appendChild(tr);
+  }
+
+  const generated = document.getElementById("generated-at");
+  if (data.generated_at_unix) {
+    generated.textContent =
+      "Data as of " + new Date(data.generated_at_unix * 1000).toLocaleString();
+  } else {
+    generated.textContent = "";
+  }
+
+  showView("stats");
+}
+
+async function load() {
+  showView("loading");
+  let response;
+  let body;
+  try {
+    response = await fetch("/api/summary");
+    body = await response.json();
+  } catch (err) {
+    showError("Could not reach the server. Is it still running?");
+    return;
+  }
+  if (!response.ok) {
+    if (body && body.error === "missing_db") {
+      showView("setup");
+    } else if (body && body.error === "busy") {
+      showError(body.message || "Database busy — retry shortly.");
+    } else {
+      showError((body && body.message) || "Unexpected server error.");
+    }
+    return;
+  }
+  render(body);
+}
+
+document.getElementById("retry-setup").addEventListener("click", load);
+document.getElementById("retry-error").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>
