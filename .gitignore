@@ -3,3 +3,4 @@ tokencache.json
 stats.db*
 credentials.json
 *.swp
+_site/
