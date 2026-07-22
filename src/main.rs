@@ -26,7 +26,8 @@ const DEFAULT_FETCH_CONCURRENCY: usize = 8;
 /// comfortably under it. Override at runtime with the GMAIL_STATS_RATE_LIMIT_MS
 /// env var (useful for projects with a lower per-user quota).
 const DEFAULT_RATE_LIMIT_MS: u64 = 25;
-/// How many times to retry a single message fetch on a rate-limit response.
+/// How many times to retry a single API call (messages.list or messages.get)
+/// on a rate-limit response.
 const MAX_FETCH_RETRIES: u32 = 5;
 
 /// A fetched message's result, sent to the single DB writer task.
@@ -115,7 +116,8 @@ async fn main() -> anyhow::Result<()> {
         auth,
     );
 
-    // Some kind of exponential backpressure on a worker would be nicer
+    // Retry a failed run a few times, backing off exponentially between
+    // attempts (see the sleep at the bottom of the loop body).
     let mut retries = 0;
     loop {
         match work(&pool, &hub, &write_tx, &rate_limiter, fetch_concurrency).await {
@@ -146,6 +148,14 @@ async fn main() -> anyhow::Result<()> {
         let (tx, rx) = mpsc::channel::<SeenMail>(100);
         write_tx = tx;
         writer_handle = task::spawn(db_writer(writer_conn, rx));
+
+        // Back off before retrying: errors that reach this loop are typically
+        // sustained conditions (e.g. quota exhaustion that outlasted the
+        // per-call retries), so hammering the API again immediately would
+        // just burn through the retry budget in seconds.
+        let delay = Duration::from_secs(1 << retries);
+        println!("waiting {:?} before retrying", delay);
+        tokio::time::sleep(delay).await;
     }
 
     // Close the channel so the writer task drains its queue and exits, then
@@ -227,49 +237,68 @@ async fn work(
     fetch_concurrency: usize,
 ) -> anyhow::Result<()> {
     // Fetch 500 messages at a time...
-    let result = hub
-        .users()
-        .messages_list("me")
-        .max_results(500)
-        .include_spam_trash(false)
-        .doit()
-        .await?;
+    let mut page_token: Option<String> = None;
+    loop {
+        let result = list_messages(hub, page_token.as_deref(), rate_limiter).await?;
 
-    let mut next_page_token = result.1.next_page_token;
-
-    parse_messages(
-        pool,
-        result.1.messages.unwrap_or_default(),
-        hub,
-        write_tx,
-        rate_limiter,
-        fetch_concurrency,
-    )
-    .await?;
-
-    while let Some(token) = next_page_token {
-        let result = hub
-            .users()
-            .messages_list("me")
-            .max_results(500)
-            .include_spam_trash(false)
-            .page_token(&token)
-            .doit()
-            .await?;
-
-        next_page_token = result.1.next_page_token;
+        let next_page_token = result.next_page_token;
         parse_messages(
             pool,
-            result.1.messages.unwrap_or_default(),
+            result.messages.unwrap_or_default(),
             hub,
             write_tx,
             rate_limiter,
             fetch_concurrency,
         )
         .await?;
+
+        match next_page_token {
+            Some(token) => page_token = Some(token),
+            None => break,
+        }
     }
 
     Ok(())
+}
+
+/// List one page of messages, waiting for a rate-limit tick before each
+/// attempt and backing off exponentially on 429/403 rate-limit responses —
+/// the same treatment fetch_message gives messages.get. Without this, a
+/// rate-limited list call would propagate out of work() and restart the
+/// entire mailbox scan from page one.
+async fn list_messages(
+    hub: &GmailHub,
+    page_token: Option<&str>,
+    rate_limiter: &Mutex<Interval>,
+) -> anyhow::Result<google_gmail1::api::ListMessagesResponse> {
+    let mut attempts = 0;
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        rate_limiter.lock().await.tick().await;
+
+        let mut call = hub
+            .users()
+            .messages_list("me")
+            .max_results(500)
+            .include_spam_trash(false);
+        if let Some(token) = page_token {
+            call = call.page_token(token);
+        }
+
+        match call.doit().await {
+            Ok((_, response)) => return Ok(response),
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_rate_limit_error(e) => {
+                attempts += 1;
+                println!(
+                    "rate limited listing messages (attempt {}), backing off for {:?}",
+                    attempts, backoff
+                );
+                tokio::time::sleep(backoff).await;
+                backoff *= 2;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 async fn parse_messages(
