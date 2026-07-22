@@ -1,4 +1,5 @@
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::TryStreamExt;
 use google_gmail1::api::Message;
@@ -65,55 +66,105 @@ async fn main() -> anyhow::Result<()> {
         auth,
     );
 
-    // Some kind of exponential backpressure on a worker would be nicer
-    let retries = 0;
+    // Retry transient failures with exponential backoff; fail fast on everything else.
+    let mut retries = 0;
+    let mut resume_token: Option<String> = None;
     loop {
-        // TODO: lol handle these better, i keep getting deadlocks but wanna just churn some emails
-        // retries += 1;
-        if retries > 3 {
-            panic!("Too many retries");
+        match work(&pool, &mut hub, &mut resume_token).await {
+            Ok(()) => break,
+            Err(err) if !is_transient(&err) => {
+                return Err(err.context("giving up: error is not retryable"));
+            }
+            Err(err) => {
+                retries += 1;
+                if retries > MAX_RETRIES {
+                    return Err(err.context(format!("giving up after {MAX_RETRIES} retries")));
+                }
+                let delay = backoff_delay(retries);
+                println!(
+                    "Transient error (attempt {retries}/{MAX_RETRIES}), retrying in {delay:?}: {err:?}"
+                );
+                tokio::time::sleep(delay).await;
+            }
         }
-
-        let res = work(&pool, &mut hub).await;
-        if res.is_ok() {
-            break;
-        }
-
-        println!("Error encountered, retrying: {:?}", res);
     }
 
     Ok(())
 }
 
-async fn work(pool: &Pool<Sqlite>, hub: &mut GmailHub) -> anyhow::Result<()> {
-    // Fetch 500 messages at a time...
-    let result = hub
-        .users()
-        .messages_list("me")
-        .max_results(500)
-        .include_spam_trash(false)
-        .doit()
-        .await?;
+const MAX_RETRIES: u32 = 3;
 
-    let mut next_page_token = result.1.next_page_token;
+/// Exponential backoff (1s, 2s, 4s, ... capped at 32s) plus up to 1s of jitter.
+fn backoff_delay(attempt: u32) -> Duration {
+    let base = Duration::from_secs(1 << attempt.saturating_sub(1).min(5));
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_millis()))
+        .unwrap_or(0);
+    base + Duration::from_millis(jitter_ms)
+}
 
-    parse_messages(pool, result.1.messages.unwrap_or_default(), hub).await?;
+/// Only transient failures are worth retrying: SQLite busy/locked (the deadlocks
+/// that motivated the retry loop) and Gmail API rate limits / server errors.
+/// Auth failures, other 4xx responses, IO errors, etc. fail fast.
+fn is_transient(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
+            return match sqlx_err {
+                sqlx::Error::Database(db_err) => {
+                    // SQLITE_BUSY (5) and SQLITE_LOCKED (6); extended result codes
+                    // (e.g. SQLITE_BUSY_SNAPSHOT = 517) keep the primary code in
+                    // the low byte.
+                    db_err
+                        .code()
+                        .and_then(|code| code.parse::<i64>().ok())
+                        .is_some_and(|code| matches!(code & 0xff, 5 | 6))
+                }
+                // Timed out waiting for a pool connection while the DB is busy.
+                sqlx::Error::PoolTimedOut => true,
+                _ => false,
+            };
+        }
+        if let Some(gmail_err) = cause.downcast_ref::<google_gmail1::Error>() {
+            return match gmail_err {
+                google_gmail1::Error::Failure(response) => {
+                    let status = response.status();
+                    status.as_u16() == 429 || status.is_server_error()
+                }
+                _ => false,
+            };
+        }
+    }
+    false
+}
 
-    while let Some(token) = next_page_token {
-        let result = hub
+async fn work(
+    pool: &Pool<Sqlite>,
+    hub: &mut GmailHub,
+    resume_token: &mut Option<String>,
+) -> anyhow::Result<()> {
+    // Fetch 500 messages at a time, starting from the last page we fully
+    // processed (so a retry doesn't re-list the whole mailbox from page one).
+    loop {
+        let mut call = hub
             .users()
             .messages_list("me")
             .max_results(500)
-            .include_spam_trash(false)
-            .page_token(&token)
-            .doit()
-            .await?;
+            .include_spam_trash(false);
+        if let Some(token) = resume_token.as_deref() {
+            call = call.page_token(token);
+        }
+        let result = call.doit().await?;
 
-        next_page_token = result.1.next_page_token;
+        let next_page_token = result.1.next_page_token;
         parse_messages(pool, result.1.messages.unwrap_or_default(), hub).await?;
-    }
 
-    Ok(())
+        // Only advance the resume point once the page has been fully processed.
+        *resume_token = next_page_token;
+        if resume_token.is_none() {
+            return Ok(());
+        }
+    }
 }
 
 async fn parse_messages(
