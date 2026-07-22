@@ -380,7 +380,8 @@ fn get_sender(message: &Message) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_transient;
+    use super::*;
+    use google_gmail1::api::{MessagePart, MessagePartHeader};
     use serde_json::json;
 
     fn envelope(code: u64) -> anyhow::Error {
@@ -451,5 +452,210 @@ mod tests {
     fn transient_cause_is_found_through_context_chain() {
         let err = envelope(429).context("while listing messages");
         assert!(is_transient(&err));
+    }
+
+    fn header(name: &str, value: Option<&str>) -> MessagePartHeader {
+        MessagePartHeader {
+            name: Some(name.to_string()),
+            value: value.map(|v| v.to_string()),
+        }
+    }
+
+    fn message_with_headers(headers: Vec<MessagePartHeader>) -> Message {
+        Message {
+            id: Some("msg-1".to_string()),
+            payload: Some(MessagePart {
+                headers: Some(headers),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // --- cleanup_sender ---
+
+    #[test]
+    fn cleanup_sender_display_name_angle_brackets() {
+        assert_eq!(
+            cleanup_sender("Jane Doe <jane@example.com>".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_angle_brackets_only() {
+        assert_eq!(
+            cleanup_sender("<jane@example.com>".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_bare_address() {
+        assert_eq!(
+            cleanup_sender("jane@example.com".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_address_with_dots_and_dashes() {
+        assert_eq!(
+            cleanup_sender("first.last-name@mail-server.example.org".to_string()),
+            "first.last-name@mail-server.example.org"
+        );
+        assert_eq!(
+            cleanup_sender("Team <first.last-name@mail-server.example.org>".to_string()),
+            "first.last-name@mail-server.example.org"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_unparseable_passes_through() {
+        assert_eq!(
+            cleanup_sender("not an email".to_string()),
+            "not an email"
+        );
+        assert_eq!(
+            cleanup_sender("Weird Sender <no-at-sign>".to_string()),
+            "Weird Sender <no-at-sign>"
+        );
+        assert_eq!(cleanup_sender(String::new()), "");
+    }
+
+    // --- get_sender ---
+
+    #[test]
+    fn get_sender_prefers_from_over_return_path() {
+        let message = message_with_headers(vec![
+            header("Return-Path", Some("bounce@example.com")),
+            header("From", Some("sender@example.com")),
+        ]);
+        assert_eq!(get_sender(&message).unwrap(), "sender@example.com");
+    }
+
+    #[test]
+    fn get_sender_is_case_insensitive() {
+        for name in ["From", "FROM", "from", "fRoM"] {
+            let message = message_with_headers(vec![header(name, Some("sender@example.com"))]);
+            assert_eq!(
+                get_sender(&message).unwrap(),
+                "sender@example.com",
+                "failed for header name {name:?}"
+            );
+        }
+
+        let message =
+            message_with_headers(vec![header("RETURN-PATH", Some("bounce@example.com"))]);
+        assert_eq!(get_sender(&message).unwrap(), "bounce@example.com");
+    }
+
+    #[test]
+    fn get_sender_skips_valueless_headers() {
+        let message = message_with_headers(vec![
+            header("From", None),
+            header("Return-Path", Some("bounce@example.com")),
+        ]);
+        assert_eq!(get_sender(&message).unwrap(), "bounce@example.com");
+    }
+
+    #[test]
+    fn get_sender_falls_back_to_empty_string() {
+        // Headers present but none relevant.
+        let message = message_with_headers(vec![header("Subject", Some("hi"))]);
+        assert_eq!(get_sender(&message).unwrap(), "");
+
+        // No payload at all.
+        let message = Message::default();
+        assert_eq!(get_sender(&message).unwrap(), "");
+    }
+
+    // --- SQLite counting logic ---
+
+    async fn test_pool() -> Pool<Sqlite> {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        // A single connection so every query sees the same in-memory database.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        sqlx::query("CREATE TABLE seen_mails (mail_id TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE senders (sender TEXT NOT NULL, mails_sent INTEGER NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        pool
+    }
+
+    fn message_from(id: &str, from: &str) -> Message {
+        let mut message = message_with_headers(vec![header("From", Some(from))]);
+        message.id = Some(id.to_string());
+        message
+    }
+
+    #[tokio::test]
+    async fn seen_mail_dedup() {
+        let pool = test_pool().await;
+        let message = message_from("mail-1", "sender@example.com");
+
+        assert!(!seen_mail("mail-1", &pool).await.unwrap());
+
+        mark_seen(&message, &pool).await.unwrap();
+
+        assert!(seen_mail("mail-1", &pool).await.unwrap());
+        // Other ids remain unseen.
+        assert!(!seen_mail("mail-2", &pool).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn increment_sender_mails_inserts_then_increments() {
+        let pool = test_pool().await;
+
+        // First mail from a sender inserts a row with mails_sent = 1.
+        let mut tx = pool.begin().await.unwrap();
+        increment_sender_mails(&message_from("mail-1", "Jane <jane@example.com>"), &mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let count: i64 =
+            sqlx::query("SELECT mails_sent FROM senders WHERE sender = 'jane@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .try_get("mails_sent")
+                .unwrap();
+        assert_eq!(count, 1);
+
+        // A second mail from the same (cleaned-up) sender increments it.
+        let mut tx = pool.begin().await.unwrap();
+        increment_sender_mails(&message_from("mail-2", "jane@example.com"), &mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let count: i64 =
+            sqlx::query("SELECT mails_sent FROM senders WHERE sender = 'jane@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .try_get("mails_sent")
+                .unwrap();
+        assert_eq!(count, 2);
+
+        // Only one row exists for the sender.
+        let rows: i64 = sqlx::query("SELECT count(1) AS ct FROM senders")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get("ct")
+            .unwrap();
+        assert_eq!(rows, 1);
     }
 }
