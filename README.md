@@ -40,7 +40,7 @@ Google Cloud project's per-user quota:
 * `GMAIL_STATS_FETCH_CONCURRENCY` — how many `messages.get` calls may be in
   flight at once (default: 8, minimum: 1).
 * `GMAIL_STATS_RATE_LIMIT_MS` — minimum spacing between Gmail API calls in
-  milliseconds (default: 25, i.e. ~40 requests/sec).
+  milliseconds (default: 25, i.e. ~40 requests/sec, minimum: 1).
 
 For example, to run gently against a project with a low quota:
 

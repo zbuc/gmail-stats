@@ -50,8 +50,15 @@ async fn main() -> anyhow::Result<()> {
         "GMAIL_STATS_FETCH_CONCURRENCY must be at least 1"
     );
     let rate_limit_ms: u64 = env_or("GMAIL_STATS_RATE_LIMIT_MS", DEFAULT_RATE_LIMIT_MS)?;
+    anyhow::ensure!(
+        rate_limit_ms >= 1,
+        "GMAIL_STATS_RATE_LIMIT_MS must be at least 1"
+    );
 
     let options = SqliteConnectOptions::from_str("sqlite://./stats.db")?
+        // Create the database file on first run; init_schema below creates the
+        // tables, so a fresh install needs no manual setup.
+        .create_if_missing(true)
         // WAL mode allows the seen-mail reads to proceed concurrently with the
         // single writer task's commits.
         .journal_mode(SqliteJournalMode::Wal)
