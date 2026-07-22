@@ -53,12 +53,21 @@ $ cargo run</pre>
         <div class="value small" id="top-sender"></div>
       </div>
     </div>
+    <div class="controls">
+      <input id="search" type="search" placeholder="Filter senders&hellip;" autocomplete="off">
+      <label class="toggle"><input id="show-hidden" type="checkbox"> Show hidden</label>
+    </div>
     <table>
       <thead>
-        <tr><th>Sender</th><th class="num">Messages</th></tr>
+        <tr><th>Sender</th><th class="num">Messages</th><th class="act"></th></tr>
       </thead>
       <tbody id="sender-rows"></tbody>
     </table>
+    <nav class="pager">
+      <button id="prev-page" type="button">&lsaquo; Prev</button>
+      <span id="page-info" class="muted"></span>
+      <button id="next-page" type="button">Next &rsaquo;</button>
+    </nav>
     <p class="muted" id="generated-at"></p>
   </section>
 </main>
