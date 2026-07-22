@@ -140,10 +140,22 @@ fn is_transient(err: &anyhow::Error) -> bool {
                 // error envelope (the normal case for Gmail 429s and 5xxs) are
                 // surfaced as `BadRequest(value)`, not `Failure`; the HTTP
                 // status is the numeric `error.code` field in the envelope.
-                google_gmail1::Error::BadRequest(value) => value
-                    .pointer("/error/code")
-                    .and_then(serde_json::Value::as_u64)
-                    .is_some_and(|code| code == 429 || (500..=599).contains(&code)),
+                google_gmail1::Error::BadRequest(value) => {
+                    match value
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_u64)
+                    {
+                        Some(code) if code == 429 || (500..=599).contains(&code) => true,
+                        // Gmail delivers per-user rate limiting as 403 too
+                        // (usageLimits domain, reason `rateLimitExceeded` /
+                        // `userRateLimitExceeded`); Google's error guide says to
+                        // retry those with backoff. Other 403s (e.g.
+                        // `insufficientPermissions`, `dailyLimitExceeded`) are
+                        // genuinely fatal and fail fast.
+                        Some(403) => is_rate_limit_envelope(value),
+                        _ => false,
+                    }
+                }
                 // Non-JSON error responses (e.g. an HTML 502 from a proxy).
                 google_gmail1::Error::Failure(response) => {
                     let status = response.status();
@@ -154,6 +166,28 @@ fn is_transient(err: &anyhow::Error) -> bool {
         }
     }
     false
+}
+
+/// True when a Google JSON error envelope describes a retryable rate-limit
+/// condition: `error.errors[*].reason` of `rateLimitExceeded` /
+/// `userRateLimitExceeded`, or `error.status` of `RESOURCE_EXHAUSTED`.
+fn is_rate_limit_envelope(value: &serde_json::Value) -> bool {
+    let reason_is_rate_limit = value
+        .pointer("/error/errors")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|errors| {
+            errors.iter().any(|e| {
+                matches!(
+                    e.get("reason").and_then(serde_json::Value::as_str),
+                    Some("rateLimitExceeded" | "userRateLimitExceeded")
+                )
+            })
+        });
+    reason_is_rate_limit
+        || value
+            .pointer("/error/status")
+            .and_then(serde_json::Value::as_str)
+            == Some("RESOURCE_EXHAUSTED")
 }
 
 async fn work(
@@ -401,6 +435,39 @@ mod tests {
         assert!(!is_transient(&envelope(401)));
         assert!(!is_transient(&envelope(403)));
         assert!(!is_transient(&envelope(404)));
+    }
+
+    fn envelope_403(reason: &str) -> anyhow::Error {
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": {
+                "code": 403,
+                "message": "boom",
+                "errors": [
+                    { "domain": "usageLimits", "reason": reason, "message": "boom" }
+                ]
+            }
+        })))
+    }
+
+    #[test]
+    fn json_403_rate_limit_reasons_are_transient() {
+        assert!(is_transient(&envelope_403("rateLimitExceeded")));
+        assert!(is_transient(&envelope_403("userRateLimitExceeded")));
+    }
+
+    #[test]
+    fn json_403_resource_exhausted_status_is_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": 403, "message": "boom", "status": "RESOURCE_EXHAUSTED" }
+        })));
+        assert!(is_transient(&err));
+    }
+
+    #[test]
+    fn json_403_non_rate_limit_reasons_are_not_transient() {
+        assert!(!is_transient(&envelope_403("insufficientPermissions")));
+        assert!(!is_transient(&envelope_403("dailyLimitExceeded")));
+        assert!(!is_transient(&envelope_403("domainPolicy")));
     }
 
     #[test]
