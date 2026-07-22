@@ -15,13 +15,14 @@ getrandom = "0.4"
 google-gmail1 = "7.0"
 lazy_static = "1.5"
 regex = "1.13"
-# Kernel flock() for the cross-process ingest lock: safe wrappers (no unsafe in
-# this crate), tiny with only the fs feature enabled. Unix-only, by design.
-rustix = { version = "1.0", features = ["fs"] }
+# Kernel flock() for the cross-process ingest lock plus kill() for the
+# viewer's owned-child cancel path: safe wrappers (no unsafe in this crate).
+# Unix-only, by design.
+rustix = { version = "1.0", features = ["fs", "process"] }
 serde = "1.0"
 serde_json = "1.0"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1.53", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 yup-oauth2 = "12"
 
 [dev-dependencies]

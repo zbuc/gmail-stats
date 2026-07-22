@@ -249,6 +249,15 @@ pub enum WriteMsg {
         /// Scan only: the mailbox's total message count, once known.
         total_estimate: Option<i64>,
     },
+    /// Scan only: OAuth consent progress. The InstalledFlow delegate sets
+    /// state='awaiting_auth' plus the consent URL when Google asks for the
+    /// user; once tokens arrive the scanner sets state back to 'running' and
+    /// clears the URL. Rides the writer channel like every other durable
+    /// write, so single-writer discipline holds.
+    AuthState {
+        state: &'static str,
+        auth_url: Option<String>,
+    },
 }
 
 /// The single DB writer: receives results over the channel and commits them
@@ -299,6 +308,18 @@ pub async fn db_writer(
                     .bind(bytes_done.map(|b| b as i64))
                     .bind(resume_token)
                     .bind(total_estimate)
+                    .bind(now_unix())
+                    .bind(run_id)
+                    .execute(&mut conn)
+                    .await?;
+                }
+                Some(WriteMsg::AuthState { state, auth_url }) => {
+                    sqlx::query(
+                        "UPDATE ingest_runs SET state = ?, auth_url = ?, \
+                         updated_at_unix = ? WHERE run_id = ?",
+                    )
+                    .bind(state)
+                    .bind(auth_url)
                     .bind(now_unix())
                     .bind(run_id)
                     .execute(&mut conn)
@@ -656,6 +677,41 @@ mod tests {
             .try_get("mails_sent")
             .unwrap();
         assert_eq!(mails, 2);
+    }
+
+    #[tokio::test]
+    async fn db_writer_applies_auth_state_transitions() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        let run_id = create_run(&mut conn, "gmail_api", None).await.unwrap();
+
+        let (tx, rx) = mpsc::channel(4);
+        let writer = tokio::spawn(db_writer(conn, rx, run_id));
+        tx.send(WriteMsg::AuthState {
+            state: "awaiting_auth",
+            auth_url: Some("https://accounts.google.com/o/oauth2/auth?x=1".into()),
+        })
+        .await
+        .unwrap();
+        tx.send(WriteMsg::AuthState {
+            state: "running",
+            auth_url: None,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        writer.await.unwrap().unwrap();
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let row = sqlx::query("SELECT state, auth_url FROM ingest_runs WHERE run_id = ?")
+            .bind(run_id)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(row.try_get::<String, _>("state").unwrap(), "running");
+        assert_eq!(row.try_get::<Option<String>, _>("auth_url").unwrap(), None);
     }
 
     #[test]
