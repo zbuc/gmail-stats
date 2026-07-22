@@ -1,6 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
 use futures::{stream, TryStreamExt};
@@ -117,14 +117,20 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Retry a failed run a few times, backing off exponentially between
-    // attempts (see the sleep at the bottom of the loop body). The retry
-    // budget is per plateau, not per process: whenever an attempt makes
-    // forward progress (completes at least one page) the counter resets, so
-    // sporadic transient errors spread across a long scan can never
-    // accumulate into an abort — only repeated failures with no progress in
-    // between exhaust the budget.
+    // attempts (see the sleep at the bottom of the loop body). Only transient
+    // failures (rate limits and server errors that outlasted the per-call
+    // retries, SQLite busy/locked) are retried; everything else fails fast.
+    // The retry budget is per plateau, not per process: whenever an attempt
+    // makes forward progress (completes at least one page) the counter
+    // resets, so sporadic transient errors spread across a long scan can
+    // never accumulate into an abort — only repeated failures with no
+    // progress in between exhaust the budget.
     let mut retries = 0;
     let mut pages_done: u64 = 0;
+    // The page token to resume from, advanced only once a page has been
+    // fully processed: a retry re-lists the page that failed instead of
+    // restarting the whole mailbox scan from page one.
+    let mut resume_token: Option<String> = None;
     loop {
         let pages_before = pages_done;
         match work(
@@ -133,65 +139,77 @@ async fn main() -> anyhow::Result<()> {
             &write_tx,
             &rate_limiter,
             fetch_concurrency,
+            &mut resume_token,
             &mut pages_done,
         )
         .await
         {
             Ok(()) => break,
             Err(e) => {
+                // Quiesce the writer before deciding what to do next: close
+                // the channel and wait for the writer to drain and commit
+                // every queued result. Without this barrier a retry's
+                // seen-mail checks race the writer's backlog — a message that
+                // is queued but not yet committed reads as unseen and gets
+                // fetched, sent, and counted a second time — and on the
+                // give-up path already-fetched messages would be discarded by
+                // runtime shutdown and re-fetched (paid quota) on the next
+                // run. This also recovers the writer's own error: when the
+                // writer died, work() only saw an opaque "channel closed"
+                // send error, and the root-cause DB error lives in the join
+                // handle.
+                drop(write_tx);
+                let writer_err = match writer_handle.await {
+                    Ok(Ok(())) => None,
+                    Ok(Err(writer_err)) => Some(writer_err),
+                    Err(join_err) => Some(anyhow::anyhow!("DB writer task panicked: {join_err:?}")),
+                };
+
+                let transient = is_transient(&e) || writer_err.as_ref().is_some_and(is_transient);
+                // If this attempt advanced the resume point (i.e. fully
+                // processed at least one page) before failing, the previous
+                // errors were intermittent, not persistent — start the budget
+                // over so MAX_RETRIES bounds *consecutive* failures.
                 if pages_done > pages_before {
                     retries = 0;
                 }
                 retries += 1;
-                if retries > 3 {
-                    // Quiesce the writer before bailing, same as the retry
-                    // path below: close the channel and wait for the writer
-                    // to drain and commit every queued result, so
-                    // already-fetched messages aren't discarded by runtime
-                    // shutdown and re-fetched (paid quota) on the next run.
-                    // This also surfaces the writer's own error — when the
-                    // writer died, work() only saw an opaque "channel
-                    // closed" send error, and the root-cause DB error lives
-                    // in the join handle.
-                    let final_err = e.context("too many retries");
-                    drop(write_tx);
-                    return match writer_handle.await {
-                        Ok(Ok(())) => Err(final_err),
-                        Ok(Err(writer_err)) => Err(final_err
-                            .context(format!("DB writer task failed: {:?}", writer_err))),
-                        Err(join_err) => Err(final_err
-                            .context(format!("DB writer task panicked: {:?}", join_err))),
+
+                if !transient || retries > MAX_RETRIES {
+                    let final_err = if transient {
+                        e.context(format!("giving up after {MAX_RETRIES} retries"))
+                    } else {
+                        e.context("giving up: error is not retryable")
+                    };
+                    return match writer_err {
+                        None => Err(final_err),
+                        Some(writer_err) => {
+                            Err(final_err.context(format!("DB writer task failed: {writer_err:?}")))
+                        }
                     };
                 }
-                println!("Error encountered, retrying: {:?}", e);
+
+                if let Some(writer_err) = &writer_err {
+                    println!("DB writer task failed, restarting it: {writer_err:?}");
+                }
+                // Spawn a fresh writer so the retry has a chance of working.
+                let writer_conn = SqliteConnection::connect_with(&options).await?;
+                let (tx, rx) = mpsc::channel::<SeenMail>(100);
+                write_tx = tx;
+                writer_handle = task::spawn(db_writer(writer_conn, rx));
+
+                // Back off before retrying: errors that reach this loop are
+                // typically sustained conditions (e.g. quota exhaustion that
+                // outlasted the per-call retries), so hammering the API again
+                // immediately would just burn through the retry budget in
+                // seconds.
+                let delay = backoff_delay(retries);
+                println!(
+                    "Transient error (attempt {retries}/{MAX_RETRIES}), retrying in {delay:?}: {e:?}"
+                );
+                tokio::time::sleep(delay).await;
             }
         }
-
-        // Quiesce the writer before retrying: close the channel and wait for
-        // the writer to drain and commit every queued result. Without this
-        // barrier the retry's seen-mail checks race the writer's backlog —
-        // a message that is queued but not yet committed reads as unseen and
-        // gets fetched, sent, and counted a second time. Awaiting the writer
-        // here guarantees the retry observes every prior result. This also
-        // covers the case where the writer task itself died (e.g. a transient
-        // "database is locked"): surface its error and spawn a fresh writer
-        // so the retry has a chance of working.
-        drop(write_tx);
-        if let Err(e) = writer_handle.await? {
-            println!("DB writer task failed, restarting it: {:?}", e);
-        }
-        let writer_conn = SqliteConnection::connect_with(&options).await?;
-        let (tx, rx) = mpsc::channel::<SeenMail>(100);
-        write_tx = tx;
-        writer_handle = task::spawn(db_writer(writer_conn, rx));
-
-        // Back off before retrying: errors that reach this loop are typically
-        // sustained conditions (e.g. quota exhaustion that outlasted the
-        // per-call retries), so hammering the API again immediately would
-        // just burn through the retry budget in seconds.
-        let delay = Duration::from_secs(1 << retries);
-        println!("waiting {:?} before retrying", delay);
-        tokio::time::sleep(delay).await;
     }
 
     // Close the channel so the writer task drains its queue and exits, then
@@ -200,6 +218,20 @@ async fn main() -> anyhow::Result<()> {
     writer_handle.await??;
 
     Ok(())
+}
+
+/// How many consecutive no-progress failures of a whole attempt to tolerate
+/// before giving up.
+const MAX_RETRIES: u32 = 3;
+
+/// Exponential backoff (1s, 2s, 4s, ... capped at 32s) plus up to 1s of jitter.
+fn backoff_delay(attempt: u32) -> Duration {
+    let base = Duration::from_secs(1 << attempt.saturating_sub(1).min(5));
+    let jitter_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| u64::from(d.subsec_millis()))
+        .unwrap_or(0);
+    base + Duration::from_millis(jitter_ms)
 }
 
 /// Read a value from an environment variable, falling back to a default when
@@ -271,12 +303,13 @@ async fn work(
     write_tx: &mpsc::Sender<SeenMail>,
     rate_limiter: &Arc<Mutex<Interval>>,
     fetch_concurrency: usize,
+    resume_token: &mut Option<String>,
     pages_done: &mut u64,
 ) -> anyhow::Result<()> {
-    // Fetch 500 messages at a time...
-    let mut page_token: Option<String> = None;
+    // Fetch 500 messages at a time, starting from the last page we fully
+    // processed (so a retry doesn't re-list the whole mailbox from page one).
     loop {
-        let result = list_messages(hub, page_token.as_deref(), rate_limiter).await?;
+        let result = list_messages(hub, resume_token.as_deref(), rate_limiter).await?;
 
         let next_page_token = result.next_page_token;
         parse_messages(
@@ -289,18 +322,16 @@ async fn work(
         )
         .await?;
 
-        // Completing a page is forward progress: the caller uses this to
-        // reset its retry budget so a long scan isn't aborted by transient
-        // errors accumulated across otherwise-successful attempts.
+        // Completing a page is forward progress: only now advance the resume
+        // point and the page counter the caller uses to reset its retry
+        // budget, so a long scan isn't aborted by transient errors
+        // accumulated across otherwise-successful attempts.
         *pages_done += 1;
-
-        match next_page_token {
-            Some(token) => page_token = Some(token),
-            None => break,
+        *resume_token = next_page_token;
+        if resume_token.is_none() {
+            return Ok(());
         }
     }
-
-    Ok(())
 }
 
 /// List one page of messages, waiting for a rate-limit tick before each
@@ -329,7 +360,7 @@ async fn list_messages(
 
         match call.doit().await {
             Ok((_, response)) => return Ok(response),
-            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_retryable_error(e) => {
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_transient_gmail(e) => {
                 attempts += 1;
                 println!(
                     "transient error listing messages (attempt {}), backing off for {:?}: {}",
@@ -401,7 +432,7 @@ async fn fetch_message(
 
         match res {
             Ok((_, message)) => return Ok(message),
-            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_retryable_error(e) => {
+            Err(ref e) if attempts < MAX_FETCH_RETRIES && is_transient_gmail(e) => {
                 attempts += 1;
                 println!(
                     "transient error fetching {} (attempt {}), backing off for {:?}: {}",
@@ -415,7 +446,41 @@ async fn fetch_message(
     }
 }
 
-/// Whether an API error is transient and warrants backoff and retry: a
+/// Only transient failures are worth retrying: Gmail API rate limits, server
+/// errors and network hiccups, plus SQLite busy/locked (the deadlocks that
+/// motivated the outer retry loop). Auth failures, other 4xx responses, etc.
+/// fail fast. Walks the whole anyhow context chain so a wrapped root cause is
+/// still recognized.
+fn is_transient(err: &anyhow::Error) -> bool {
+    for cause in err.chain() {
+        if let Some(sqlx_err) = cause.downcast_ref::<sqlx::Error>() {
+            return is_transient_sqlx(sqlx_err);
+        }
+        if let Some(gmail_err) = cause.downcast_ref::<google_gmail1::Error>() {
+            return is_transient_gmail(gmail_err);
+        }
+    }
+    false
+}
+
+fn is_transient_sqlx(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db_err) => {
+            // SQLITE_BUSY (5) and SQLITE_LOCKED (6); extended result codes
+            // (e.g. SQLITE_BUSY_SNAPSHOT = 517) keep the primary code in the
+            // low byte.
+            db_err
+                .code()
+                .and_then(|code| code.parse::<i64>().ok())
+                .is_some_and(|code| matches!(code & 0xff, 5 | 6))
+        }
+        // Timed out waiting for a pool connection while the DB is busy.
+        sqlx::Error::PoolTimedOut => true,
+        _ => false,
+    }
+}
+
+/// Whether a Gmail API error is transient and warrants backoff and retry: a
 /// rate-limit response, a retryable 5xx server error, or a network-level
 /// failure (connection reset, TLS hiccup, truncated body). A long scan makes
 /// hundreds of thousands of requests, so sporadic errors from all three
@@ -428,8 +493,10 @@ async fn fetch_message(
 /// rate-limit 403 (`userRateLimitExceeded`), and sporadic 5xx
 /// (`UNAVAILABLE`/`backendError`) responses all carry Google's standard JSON
 /// error envelope, so they arrive as `BadRequest` and must be recognized by
-/// inspecting the embedded error code/status/reason.
-fn is_retryable_error(err: &google_gmail1::Error) -> bool {
+/// inspecting the embedded error code/status/reason. Other 403 reasons (e.g.
+/// `insufficientPermissions`, `dailyLimitExceeded`) are genuinely fatal and
+/// fail fast.
+fn is_transient_gmail(err: &google_gmail1::Error) -> bool {
     match err {
         google_gmail1::Error::BadRequest(value) => {
             let error = &value["error"];
@@ -545,57 +612,310 @@ fn cleanup_sender(sender: String) -> String {
 }
 
 fn get_sender(message: &Message) -> anyhow::Result<String> {
-    let mut from_headers = message
-        .clone()
+    // Header names are case-insensitive (RFC 5322); check candidates in priority order.
+    const CANDIDATES: [&str; 2] = ["from", "return-path"];
+    let headers = message
         .payload
-        .unwrap_or_default()
-        .headers
-        .unwrap_or_default()
-        .iter()
-        .filter(|header| header.name == Some("From".to_string()))
-        .cloned()
-        .collect::<Vec<_>>();
+        .as_ref()
+        .and_then(|p| p.headers.as_deref())
+        .unwrap_or(&[]);
 
-    if from_headers.is_empty() {
-        from_headers = message
-            .clone()
-            .payload
-            .unwrap_or_default()
-            .headers
-            .unwrap_or_default()
-            .iter()
-            .filter(|header| header.name == Some("FROM".to_string()))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        // TODO: lol this is dumb, should have a Vec<String> of headers instead of this weird mess
-        if from_headers.is_empty() {
-            from_headers = message
-                .clone()
-                .payload
-                .unwrap_or_default()
-                .headers
-                .unwrap_or_default()
-                .iter()
-                .filter(|header| header.name == Some("Return-Path".to_string()))
-                .cloned()
-                .collect::<Vec<_>>();
-
-            if from_headers.is_empty() {
-                println!("weird email without from header: {:?}", message);
-                return Ok("".to_string());
-            }
+    for candidate in CANDIDATES {
+        if let Some(value) = headers.iter().find_map(|header| {
+            header
+                .name
+                .as_deref()
+                .filter(|name| name.eq_ignore_ascii_case(candidate))
+                .and(header.value.as_deref())
+        }) {
+            return Ok(value.to_string());
         }
-        return Ok(from_headers[0]
-            .value
-            .as_ref()
-            .expect("expected sender for mail")
-            .to_string());
     }
 
-    Ok(from_headers[0]
-        .value
-        .as_ref()
-        .expect("expected sender for mail")
-        .to_string())
+    println!("weird email without from header: {:?}", message.id);
+    Ok(String::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use google_gmail1::api::{MessagePart, MessagePartHeader};
+    use serde_json::json;
+
+    fn envelope(code: u64) -> anyhow::Error {
+        // Google's standard JSON error envelope, as parsed into
+        // `google_gmail1::Error::BadRequest` by the generated doit() code.
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": code, "message": "boom", "status": "UNKNOWN" }
+        })))
+    }
+
+    #[test]
+    fn json_429_and_5xx_are_transient() {
+        assert!(is_transient(&envelope(429)));
+        assert!(is_transient(&envelope(500)));
+        assert!(is_transient(&envelope(503)));
+    }
+
+    #[test]
+    fn json_4xx_other_than_429_is_not_transient() {
+        assert!(!is_transient(&envelope(400)));
+        assert!(!is_transient(&envelope(401)));
+        assert!(!is_transient(&envelope(403)));
+        assert!(!is_transient(&envelope(404)));
+    }
+
+    fn envelope_403(reason: &str) -> anyhow::Error {
+        anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": {
+                "code": 403,
+                "message": "boom",
+                "errors": [
+                    { "domain": "usageLimits", "reason": reason, "message": "boom" }
+                ]
+            }
+        })))
+    }
+
+    #[test]
+    fn json_403_rate_limit_reasons_are_transient() {
+        assert!(is_transient(&envelope_403("rateLimitExceeded")));
+        assert!(is_transient(&envelope_403("userRateLimitExceeded")));
+    }
+
+    #[test]
+    fn json_403_resource_exhausted_status_is_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "error": { "code": 403, "message": "boom", "status": "RESOURCE_EXHAUSTED" }
+        })));
+        assert!(is_transient(&err));
+    }
+
+    #[test]
+    fn json_403_non_rate_limit_reasons_are_not_transient() {
+        assert!(!is_transient(&envelope_403("insufficientPermissions")));
+        assert!(!is_transient(&envelope_403("dailyLimitExceeded")));
+        assert!(!is_transient(&envelope_403("domainPolicy")));
+    }
+
+    #[test]
+    fn bad_request_without_error_code_is_not_transient() {
+        let err = anyhow::Error::new(google_gmail1::Error::BadRequest(json!({
+            "message": "no envelope here"
+        })));
+        assert!(!is_transient(&err));
+    }
+
+    #[test]
+    fn transient_cause_is_found_through_context_chain() {
+        let err = envelope(429).context("while listing messages");
+        assert!(is_transient(&err));
+    }
+
+    fn header(name: &str, value: Option<&str>) -> MessagePartHeader {
+        MessagePartHeader {
+            name: Some(name.to_string()),
+            value: value.map(|v| v.to_string()),
+        }
+    }
+
+    fn message_with_headers(headers: Vec<MessagePartHeader>) -> Message {
+        Message {
+            id: Some("msg-1".to_string()),
+            payload: Some(MessagePart {
+                headers: Some(headers),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // --- cleanup_sender ---
+
+    #[test]
+    fn cleanup_sender_display_name_angle_brackets() {
+        assert_eq!(
+            cleanup_sender("Jane Doe <jane@example.com>".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_angle_brackets_only() {
+        assert_eq!(
+            cleanup_sender("<jane@example.com>".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_bare_address() {
+        assert_eq!(
+            cleanup_sender("jane@example.com".to_string()),
+            "jane@example.com"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_address_with_dots_and_dashes() {
+        assert_eq!(
+            cleanup_sender("first.last-name@mail-server.example.org".to_string()),
+            "first.last-name@mail-server.example.org"
+        );
+        assert_eq!(
+            cleanup_sender("Team <first.last-name@mail-server.example.org>".to_string()),
+            "first.last-name@mail-server.example.org"
+        );
+    }
+
+    #[test]
+    fn cleanup_sender_unparseable_passes_through() {
+        assert_eq!(cleanup_sender("not an email".to_string()), "not an email");
+        assert_eq!(
+            cleanup_sender("Weird Sender <no-at-sign>".to_string()),
+            "Weird Sender <no-at-sign>"
+        );
+        assert_eq!(cleanup_sender(String::new()), "");
+    }
+
+    // --- get_sender ---
+
+    #[test]
+    fn get_sender_prefers_from_over_return_path() {
+        let message = message_with_headers(vec![
+            header("Return-Path", Some("bounce@example.com")),
+            header("From", Some("sender@example.com")),
+        ]);
+        assert_eq!(get_sender(&message).unwrap(), "sender@example.com");
+    }
+
+    #[test]
+    fn get_sender_is_case_insensitive() {
+        for name in ["From", "FROM", "from", "fRoM"] {
+            let message = message_with_headers(vec![header(name, Some("sender@example.com"))]);
+            assert_eq!(
+                get_sender(&message).unwrap(),
+                "sender@example.com",
+                "failed for header name {name:?}"
+            );
+        }
+
+        let message = message_with_headers(vec![header("RETURN-PATH", Some("bounce@example.com"))]);
+        assert_eq!(get_sender(&message).unwrap(), "bounce@example.com");
+    }
+
+    #[test]
+    fn get_sender_skips_valueless_headers() {
+        let message = message_with_headers(vec![
+            header("From", None),
+            header("Return-Path", Some("bounce@example.com")),
+        ]);
+        assert_eq!(get_sender(&message).unwrap(), "bounce@example.com");
+    }
+
+    #[test]
+    fn get_sender_falls_back_to_empty_string() {
+        // Headers present but none relevant.
+        let message = message_with_headers(vec![header("Subject", Some("hi"))]);
+        assert_eq!(get_sender(&message).unwrap(), "");
+
+        // No payload at all.
+        let message = Message::default();
+        assert_eq!(get_sender(&message).unwrap(), "");
+    }
+
+    // --- SQLite counting logic ---
+
+    async fn test_pool() -> Pool<Sqlite> {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:").unwrap();
+        // A single connection so every query sees the same in-memory database.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+
+        // Run the production DDL so the tests exercise the same schema the
+        // real database has, including the `string` type name (SQLite gives
+        // such columns NUMERIC affinity rather than TEXT) and the unique
+        // index on seen_mails.mail_id that makes mark_seen idempotent.
+        let mut conn = pool.acquire().await.unwrap();
+        init_schema(&mut conn).await.unwrap();
+        drop(conn);
+
+        pool
+    }
+
+    #[tokio::test]
+    async fn seen_mail_dedup() {
+        let pool = test_pool().await;
+
+        assert!(!seen_mail("mail-1", &pool).await.unwrap());
+
+        // First sighting inserts the row and reports it as newly seen.
+        assert!(mark_seen("mail-1", &pool).await.unwrap());
+
+        assert!(seen_mail("mail-1", &pool).await.unwrap());
+        // Other ids remain unseen.
+        assert!(!seen_mail("mail-2", &pool).await.unwrap());
+
+        // Replaying the same id is ignored and reports it as already seen.
+        assert!(!mark_seen("mail-1", &pool).await.unwrap());
+        let rows: i64 = sqlx::query("SELECT count(1) AS ct FROM seen_mails")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get("ct")
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
+
+    #[tokio::test]
+    async fn increment_sender_mails_inserts_then_increments() {
+        let pool = test_pool().await;
+
+        // First mail from a sender inserts a row with mails_sent = 1.
+        let mut tx = pool.begin().await.unwrap();
+        increment_sender_mails(
+            &cleanup_sender("Jane <jane@example.com>".to_string()),
+            &mut tx,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let count: i64 =
+            sqlx::query("SELECT mails_sent FROM senders WHERE sender = 'jane@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .try_get("mails_sent")
+                .unwrap();
+        assert_eq!(count, 1);
+
+        // A second mail from the same (cleaned-up) sender increments it.
+        let mut tx = pool.begin().await.unwrap();
+        increment_sender_mails(&cleanup_sender("jane@example.com".to_string()), &mut tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+
+        let count: i64 =
+            sqlx::query("SELECT mails_sent FROM senders WHERE sender = 'jane@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .try_get("mails_sent")
+                .unwrap();
+        assert_eq!(count, 2);
+
+        // Only one row exists for the sender.
+        let rows: i64 = sqlx::query("SELECT count(1) AS ct FROM senders")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .try_get("ct")
+            .unwrap();
+        assert_eq!(rows, 1);
+    }
 }
