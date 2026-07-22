@@ -125,7 +125,24 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => {
                 retries += 1;
                 if retries > 3 {
-                    return Err(e.context("too many retries"));
+                    // Quiesce the writer before bailing, same as the retry
+                    // path below: close the channel and wait for the writer
+                    // to drain and commit every queued result, so
+                    // already-fetched messages aren't discarded by runtime
+                    // shutdown and re-fetched (paid quota) on the next run.
+                    // This also surfaces the writer's own error — when the
+                    // writer died, work() only saw an opaque "channel
+                    // closed" send error, and the root-cause DB error lives
+                    // in the join handle.
+                    let final_err = e.context("too many retries");
+                    drop(write_tx);
+                    return match writer_handle.await {
+                        Ok(Ok(())) => Err(final_err),
+                        Ok(Err(writer_err)) => Err(final_err
+                            .context(format!("DB writer task failed: {:?}", writer_err))),
+                        Err(join_err) => Err(final_err
+                            .context(format!("DB writer task panicked: {:?}", join_err))),
+                    };
                 }
                 println!("Error encountered, retrying: {:?}", e);
             }
