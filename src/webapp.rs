@@ -1644,6 +1644,74 @@ mod tests {
             .contains_key("unsubscribe"));
     }
 
+    /// Scan-path parity (issue #41 Phase U2): a database populated purely by
+    /// the API-scan machinery — bare Gmail ids and captures written through
+    /// the real single-writer channel, exactly as a live scan emits them —
+    /// serves the full unsubscribe surface. The viewer is source-agnostic by
+    /// construction; this proves it end-to-end rather than assuming it.
+    #[tokio::test]
+    async fn summary_serves_unsubscribe_for_a_scan_sourced_database() {
+        use crate::ingest::{SeenMail, UnsubscribeCapture, WriteMsg};
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = migrated_db(&dir).await;
+        let options = SqliteConnectOptions::new()
+            .filename(&db_path)
+            .journal_mode(SqliteJournalMode::Wal);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let run_id = ingest::create_run(&mut conn, "gmail_api", None)
+            .await
+            .unwrap();
+        let (tx, rx) = tokio::sync::mpsc::channel::<WriteMsg>(16);
+        let writer = tokio::spawn(ingest::db_writer(conn, rx, run_id));
+        // What a scan emits per fetched message: the capture, then the Seen
+        // row keyed by the bare Gmail id.
+        tx.send(WriteMsg::Unsubscribe {
+            sender: "news@example.com".into(),
+            capture: UnsubscribeCapture {
+                https_url: Some("https://news.example/u?tok=live".into()),
+                mailto: None,
+                one_click: true,
+            },
+            internal_date: Some(1_700_000_000_000),
+        })
+        .await
+        .unwrap();
+        tx.send(WriteMsg::Seen(SeenMail {
+            message_id: "gmail-id-1".into(),
+            sender: "news@example.com".into(),
+            rfc_message_id: Some("m1@example.com".into()),
+        }))
+        .await
+        .unwrap();
+        tx.send(WriteMsg::Seen(SeenMail {
+            message_id: "gmail-id-2".into(),
+            sender: "quiet@example.com".into(),
+            rfc_message_id: Some("m2@example.com".into()),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+        writer.await.unwrap().unwrap();
+
+        let (status, body) = get_json(app_for(&db_path), "/api/summary").await;
+        assert_eq!(status, StatusCode::OK);
+        let senders = body["senders"].as_array().unwrap();
+        let news = senders
+            .iter()
+            .find(|row| row["sender"] == "news@example.com")
+            .expect("scan-sourced sender missing from the summary");
+        assert_eq!(
+            news["unsubscribe"],
+            json!({ "url": "https://news.example/u?tok=live", "one_click": true })
+        );
+        let quiet = senders
+            .iter()
+            .find(|row| row["sender"] == "quiet@example.com")
+            .unwrap();
+        assert!(!quiet.as_object().unwrap().contains_key("unsubscribe"));
+    }
+
     #[tokio::test]
     async fn status_with_missing_db_is_200_and_onboardable() {
         let dir = tempfile::tempdir().unwrap();

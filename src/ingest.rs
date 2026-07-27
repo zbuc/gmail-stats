@@ -17,8 +17,11 @@ use tokio::time::MissedTickBehavior;
 /// are the version-0 baseline; migration 1 adds `ingest_runs`; migration 2
 /// adds `seen_mails.rfc_message_id` for cross-source dedupe (issue #26
 /// Phase D); migration 3 adds `sender_unsubscribe` for per-sender
-/// List-Unsubscribe capture (issue #41 Phase U1).
-pub const SCHEMA_VERSION: i64 = 3;
+/// List-Unsubscribe capture (issue #41 Phase U1); migration 4 adds
+/// `seen_mails.unsubscribe_checked` (the repair pass's "headers already
+/// checked for unsubscribe data" marker) and
+/// `sender_unsubscribe.source_internal_date` (issue #41 Phase U2).
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub fn now_unix() -> i64 {
     SystemTime::now()
@@ -174,6 +177,43 @@ pub async fn migrate(conn: &mut SqliteConnection) -> anyhow::Result<()> {
         .execute(&mut *tx)
         .await?;
         sqlx::query("PRAGMA user_version = 3")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+
+    if version < 4 {
+        // Migration 4 (issue #41 Phase U2): scan-path unsubscribe capture.
+        //
+        // seen_mails.unsubscribe_checked marks rows whose headers have been
+        // examined for List-Unsubscribe data — set by live ingestion (both
+        // the scan and the import parse the headers of every message they
+        // record) and by the repair pass. It makes the repair pass's pending
+        // predicate precise: "checked, sender has no unsubscribe headers" is
+        // distinguishable from "never looked", so re-runs never refetch a
+        // message just because it yielded no record. All pre-existing rows
+        // default to 0 (their headers were ingested before capture existed);
+        // only bare-Gmail-id rows are ever fetched by the repair pass — a
+        // `mid:` row's headers can only be revisited by re-importing its
+        // mbox, which back-populates capture on its own.
+        //
+        // sender_unsubscribe.source_internal_date records the Gmail
+        // internalDate (epoch millis) of the message a record came from,
+        // when known. The repair pass iterates in mail_id order — not
+        // chronological order — so it uses this to avoid clobbering a
+        // newer message's capture with an older one; live ingestion stays
+        // simple latest-ingested-wins and NULL means "no timestamp known"
+        // (mbox imports).
+        let mut tx = conn.begin().await?;
+        sqlx::query(
+            "ALTER TABLE seen_mails ADD COLUMN unsubscribe_checked INTEGER NOT NULL DEFAULT 0",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("ALTER TABLE sender_unsubscribe ADD COLUMN source_internal_date INTEGER")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("PRAGMA user_version = 4")
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -428,6 +468,12 @@ pub enum WriteMsg {
     Unsubscribe {
         sender: String,
         capture: UnsubscribeCapture,
+        /// The source message's Gmail internalDate (epoch millis) when the
+        /// ingester knows it (API scans do; mbox imports don't). Stored so
+        /// the backfill repair pass can avoid overwriting a newer message's
+        /// capture with an older one; live ingestion itself always wins
+        /// wholesale regardless of this value.
+        internal_date: Option<i64>,
     },
     Progress {
         messages_seen: u64,
@@ -499,19 +545,21 @@ pub async fn db_writer(
                     }
                     tx.commit().await?;
                 }
-                Some(WriteMsg::Unsubscribe { sender, capture }) => {
+                Some(WriteMsg::Unsubscribe { sender, capture, internal_date }) => {
                     // Unconditional upsert: ingestion order is the "latest
                     // message wins" order, and a single statement is atomic.
                     sqlx::query(
                         "INSERT INTO sender_unsubscribe \
-                         (sender, https_url, mailto, one_click, run_id, updated_at_unix) \
-                         VALUES (?, ?, ?, ?, ?, ?) \
+                         (sender, https_url, mailto, one_click, run_id, updated_at_unix, \
+                          source_internal_date) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?) \
                          ON CONFLICT(sender) DO UPDATE SET \
                            https_url = excluded.https_url, \
                            mailto = excluded.mailto, \
                            one_click = excluded.one_click, \
                            run_id = excluded.run_id, \
-                           updated_at_unix = excluded.updated_at_unix",
+                           updated_at_unix = excluded.updated_at_unix, \
+                           source_internal_date = excluded.source_internal_date",
                     )
                     .bind(&sender)
                     .bind(&capture.https_url)
@@ -519,6 +567,7 @@ pub async fn db_writer(
                     .bind(capture.one_click as i64)
                     .bind(run_id)
                     .bind(now_unix())
+                    .bind(internal_date)
                     .execute(&mut conn)
                     .await?;
                 }
@@ -584,12 +633,19 @@ pub async fn seen_mail(
 /// Returns whether the id was newly inserted; false means it was already
 /// present and must not be counted again.
 async fn mark_seen(mail: &SeenMail, executor: impl SqliteExecutor<'_>) -> anyhow::Result<bool> {
-    let result =
-        sqlx::query("INSERT OR IGNORE INTO seen_mails (mail_id, rfc_message_id) VALUES (?, ?)")
-            .bind(&mail.message_id)
-            .bind(&mail.rfc_message_id)
-            .execute(executor)
-            .await?;
+    // unsubscribe_checked is hardwired to 1: every ingester that emits Seen
+    // has examined the message's List-Unsubscribe headers by the time the row
+    // lands here (the importer parses them for every message since Phase U1,
+    // the scan requests them with every fetch since Phase U2), so the row is
+    // born outside the repair pass's pending set.
+    let result = sqlx::query(
+        "INSERT OR IGNORE INTO seen_mails (mail_id, rfc_message_id, unsubscribe_checked) \
+         VALUES (?, ?, 1)",
+    )
+    .bind(&mail.message_id)
+    .bind(&mail.rfc_message_id)
+    .execute(executor)
+    .await?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -668,6 +724,15 @@ pub struct BackfillMsg {
     /// the scan does — this is whose count is decremented when the row turns
     /// out to be a cross-source duplicate.
     pub sender: String,
+    /// Valid List-Unsubscribe targets parsed from the fetched headers via the
+    /// shared [`parse_unsubscribe_headers`]; None when the message carries no
+    /// usable target (the row is still marked checked so it is never fetched
+    /// again).
+    pub unsubscribe: Option<UnsubscribeCapture>,
+    /// The fetched message's Gmail internalDate (epoch millis), used to keep
+    /// an older message's capture from overwriting a newer one — the backfill
+    /// iterates in mail_id order, which is not chronological.
+    pub internal_date: Option<i64>,
 }
 
 /// What the backfill writer did, for the run summary.
@@ -682,8 +747,14 @@ pub struct BackfillOutcome {
     pub missing_id: u64,
     /// Duplicate pairs collapsed: sender counts decremented once each.
     pub decremented: u64,
-    /// Rows that were already repaired when their result arrived (replays);
-    /// always 0 in a single clean run.
+    /// Rows whose fetched headers carried valid unsubscribe targets that were
+    /// recorded (inserted, or overwriting an older capture). Rows whose
+    /// capture was skipped because a newer message's record already exists
+    /// are checked but not counted here.
+    pub unsubscribe_recorded: u64,
+    /// Rows that were already fully repaired (Message-ID known AND
+    /// unsubscribe-checked) when their result arrived (replays); always 0 in
+    /// a single clean run.
     pub already_done: u64,
 }
 
@@ -691,20 +762,24 @@ pub struct BackfillOutcome {
 /// own transaction and heartbeats the run row like [`db_writer`]. Returns a
 /// summary of what it changed.
 ///
-/// Per-row logic (the collapse fused with the populate, so partial completion
+/// Per-row logic (repairs fused into one transaction, so partial completion
 /// plus a re-run is always exact):
-/// - a row that is no longer NULL is skipped — populate-and-decrement already
-///   happened, replaying the message is a no-op;
-/// - otherwise the fetched Message-ID (or the '' sentinel for "fetched, has
-///   none") is stored, and if the normalized id already exists on any *other*
-///   row — the mbox side of a historical double count, or an earlier repaired
-///   scan row with the same Message-ID — the sender's count is decremented
-///   once, never below zero.
+/// - a row that is fully repaired (Message-ID recorded AND
+///   unsubscribe-checked) is skipped — replaying the message is a no-op;
+/// - a still-NULL Message-ID is populated (or the '' sentinel for "fetched,
+///   has none"), and if the normalized id already exists on any *other* row —
+///   the mbox side of a historical double count, or an earlier repaired scan
+///   row with the same Message-ID — the sender's count is decremented once,
+///   never below zero;
+/// - an unchecked row's unsubscribe capture (if any) is recorded — unless the
+///   sender's existing record came from a message with a newer internalDate,
+///   since the backfill iterates in mail_id order, not chronological order —
+///   and the row is marked unsubscribe_checked either way, so "checked,
+///   nothing to capture" never refetches.
 ///
-/// Because the decision is committed atomically with the populate, a run
-/// killed anywhere leaves every row either fully repaired (populated and, if
-/// it was a duplicate, decremented) or untouched (still NULL, picked up by
-/// the next run). A second run over a repaired database finds no NULL rows
+/// Because every decision is committed atomically per row, a run killed
+/// anywhere leaves each row either fully repaired or untouched (picked up by
+/// the next run). A second run over a repaired database finds no pending rows
 /// and does nothing.
 pub async fn backfill_writer(
     mut conn: SqliteConnection,
@@ -720,7 +795,7 @@ pub async fn backfill_writer(
                 None => break,
                 Some(msg) => {
                     let mut tx = conn.begin().await?;
-                    apply_backfill(&mut tx, &msg, &mut outcome).await?;
+                    apply_backfill(&mut tx, &msg, run_id, &mut outcome).await?;
                     sqlx::query(
                         "UPDATE ingest_runs SET messages_seen = ?, messages_new = ?, \
                          updated_at_unix = ? WHERE run_id = ?",
@@ -749,54 +824,112 @@ pub async fn backfill_writer(
 async fn apply_backfill(
     tx: &mut Transaction<'_, Sqlite>,
     msg: &BackfillMsg,
+    run_id: i64,
     outcome: &mut BackfillOutcome,
 ) -> anyhow::Result<()> {
     outcome.examined += 1;
-    let still_null: i64 = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM seen_mails \
-         WHERE mail_id = ? AND rfc_message_id IS NULL)",
+    let row: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT rfc_message_id IS NULL, unsubscribe_checked \
+         FROM seen_mails WHERE mail_id = ?",
     )
     .bind(&msg.mail_id)
-    .fetch_one(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    if still_null == 0 {
+    // A vanished row (externally deleted mid-run) has nothing left to repair.
+    let Some((rfc_null, checked)) = row else {
+        outcome.already_done += 1;
+        return Ok(());
+    };
+    if rfc_null == 0 && checked != 0 {
         outcome.already_done += 1;
         return Ok(());
     }
-    match msg.rfc_message_id.as_deref() {
-        None => {
-            // '' sentinel: fetched, genuinely has no Message-ID. Never
-            // matched by the dedupe check (which only binds non-empty
-            // normalized ids), but no longer NULL, so re-runs skip it.
-            sqlx::query("UPDATE seen_mails SET rfc_message_id = '' WHERE mail_id = ?")
-                .bind(&msg.mail_id)
-                .execute(&mut **tx)
-                .await?;
-            outcome.missing_id += 1;
-        }
-        Some(rfc_id) => {
-            let duplicate = rfc_id_exists_elsewhere(rfc_id, &msg.mail_id, &mut **tx).await?;
-            sqlx::query("UPDATE seen_mails SET rfc_message_id = ? WHERE mail_id = ?")
-                .bind(rfc_id)
-                .bind(&msg.mail_id)
-                .execute(&mut **tx)
-                .await?;
-            outcome.populated += 1;
-            if duplicate {
-                // This message was counted once by the scan (this row) and
-                // once by the other row's ingester: collapse exactly one of
-                // the two, clamped at zero in case the counts were already
-                // edited out from under us.
-                sqlx::query(
-                    "UPDATE senders SET mails_sent = mails_sent - 1 \
-                     WHERE sender = ? AND mails_sent > 0",
-                )
-                .bind(&msg.sender)
-                .execute(&mut **tx)
-                .await?;
-                outcome.decremented += 1;
+
+    if rfc_null != 0 {
+        match msg.rfc_message_id.as_deref() {
+            None => {
+                // '' sentinel: fetched, genuinely has no Message-ID. Never
+                // matched by the dedupe check (which only binds non-empty
+                // normalized ids), but no longer NULL, so re-runs skip it.
+                sqlx::query("UPDATE seen_mails SET rfc_message_id = '' WHERE mail_id = ?")
+                    .bind(&msg.mail_id)
+                    .execute(&mut **tx)
+                    .await?;
+                outcome.missing_id += 1;
+            }
+            Some(rfc_id) => {
+                let duplicate = rfc_id_exists_elsewhere(rfc_id, &msg.mail_id, &mut **tx).await?;
+                sqlx::query("UPDATE seen_mails SET rfc_message_id = ? WHERE mail_id = ?")
+                    .bind(rfc_id)
+                    .bind(&msg.mail_id)
+                    .execute(&mut **tx)
+                    .await?;
+                outcome.populated += 1;
+                if duplicate {
+                    // This message was counted once by the scan (this row) and
+                    // once by the other row's ingester: collapse exactly one of
+                    // the two, clamped at zero in case the counts were already
+                    // edited out from under us.
+                    sqlx::query(
+                        "UPDATE senders SET mails_sent = mails_sent - 1 \
+                         WHERE sender = ? AND mails_sent > 0",
+                    )
+                    .bind(&msg.sender)
+                    .execute(&mut **tx)
+                    .await?;
+                    outcome.decremented += 1;
+                }
             }
         }
+    }
+
+    if checked == 0 {
+        if let Some(capture) = &msg.unsubscribe {
+            // Guarded upsert: the backfill visits messages in mail_id order,
+            // not chronological order, so an existing record is only replaced
+            // when this message's internalDate is at least as new. A record
+            // without a source_internal_date was written by live ingestion
+            // (import, or an older schema) — its message is not comparably
+            // dated, so the historical backfill leaves it alone; likewise a
+            // fetch that (unexpectedly) returned no internalDate never
+            // overwrites a dated record.
+            let applied = sqlx::query(
+                "INSERT INTO sender_unsubscribe \
+                 (sender, https_url, mailto, one_click, run_id, updated_at_unix, \
+                  source_internal_date) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(sender) DO UPDATE SET \
+                   https_url = excluded.https_url, \
+                   mailto = excluded.mailto, \
+                   one_click = excluded.one_click, \
+                   run_id = excluded.run_id, \
+                   updated_at_unix = excluded.updated_at_unix, \
+                   source_internal_date = excluded.source_internal_date \
+                 WHERE sender_unsubscribe.source_internal_date IS NOT NULL \
+                   AND excluded.source_internal_date IS NOT NULL \
+                   AND excluded.source_internal_date >= \
+                       sender_unsubscribe.source_internal_date",
+            )
+            .bind(&msg.sender)
+            .bind(&capture.https_url)
+            .bind(&capture.mailto)
+            .bind(capture.one_click as i64)
+            .bind(run_id)
+            .bind(now_unix())
+            .bind(msg.internal_date)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+            if applied > 0 {
+                outcome.unsubscribe_recorded += 1;
+            }
+        }
+        // Marked checked regardless of whether anything was captured, in the
+        // same transaction: this row never needs fetching again.
+        sqlx::query("UPDATE seen_mails SET unsubscribe_checked = 1 WHERE mail_id = ?")
+            .bind(&msg.mail_id)
+            .execute(&mut **tx)
+            .await?;
     }
     Ok(())
 }
@@ -918,11 +1051,21 @@ mod tests {
         assert!(table_exists(&mut conn, "sender_unsubscribe").await);
         assert!(index_exists(&mut conn, "seen_mails_rfc_message_id").await);
         assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
-        // The column is usable on a fresh database.
-        sqlx::query("INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES ('g1', 'a@b')")
-            .execute(&mut conn)
-            .await
-            .unwrap();
+        // The columns are usable on a fresh database.
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id, unsubscribe_checked) \
+             VALUES ('g1', 'a@b', 1)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sender_unsubscribe (sender, https_url, source_internal_date) \
+             VALUES ('a@b', 'https://x.example/u', 123)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -983,9 +1126,13 @@ mod tests {
     async fn migrate_upgrades_a_version_1_database_and_populates_mid_rows() {
         let mut conn = memory_conn().await;
         migrate(&mut conn).await.unwrap();
-        // Rewind to version 1: drop the Phase-D column by rebuilding the
-        // table the way a v1 binary left it.
+        // Rewind to version 1: rebuild the tables the way a v1 binary left
+        // them (no Phase-D column, no unsubscribe tables/columns).
         sqlx::query("DROP TABLE seen_mails")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE sender_unsubscribe")
             .execute(&mut conn)
             .await
             .unwrap();
@@ -1032,21 +1179,60 @@ mod tests {
         assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
     }
 
-    /// A version-2 database (Phase D, pre-#41): migration 3 adds the
-    /// sender_unsubscribe table and nothing else — existing data untouched.
+    /// Rebuild the tables the way a v2/v3 binary left them: seen_mails with
+    /// rfc_message_id but no unsubscribe_checked, and (for v3) the original
+    /// sender_unsubscribe without source_internal_date.
+    async fn rewind_to(conn: &mut SqliteConnection, version: i64) {
+        sqlx::query("DROP TABLE seen_mails")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE sender_unsubscribe")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE seen_mails (mail_id string, rfc_message_id TEXT)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE UNIQUE INDEX seen_mails_mail_id_unique ON seen_mails (mail_id)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        sqlx::query("CREATE INDEX seen_mails_rfc_message_id ON seen_mails (rfc_message_id)")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        if version >= 3 {
+            sqlx::query(
+                "CREATE TABLE sender_unsubscribe (
+                   sender          TEXT PRIMARY KEY,
+                   https_url       TEXT,
+                   mailto          TEXT,
+                   one_click       INTEGER NOT NULL DEFAULT 0,
+                   run_id          INTEGER,
+                   updated_at_unix INTEGER NOT NULL DEFAULT 0
+                 )",
+            )
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        }
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "PRAGMA user_version = {version}"
+        )))
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+    }
+
+    /// A version-2 database (Phase D, pre-#41): migrations 3 and 4 add the
+    /// sender_unsubscribe table and the U2 columns — existing data untouched.
     #[tokio::test]
     async fn migrate_upgrades_a_version_2_database() {
         let mut conn = memory_conn().await;
         migrate(&mut conn).await.unwrap();
-        // Rewind to version 2 the way a v2 binary left things.
-        sqlx::query("DROP TABLE sender_unsubscribe")
-            .execute(&mut conn)
-            .await
-            .unwrap();
-        sqlx::query("PRAGMA user_version = 2")
-            .execute(&mut conn)
-            .await
-            .unwrap();
+        rewind_to(&mut conn, 2).await;
         sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES ('a@example.com', 7)")
             .execute(&mut conn)
             .await
@@ -1063,6 +1249,63 @@ mod tests {
             .try_get("mails_sent")
             .unwrap();
         assert_eq!(mails, 7);
+
+        // Running again is a no-op.
+        migrate(&mut conn).await.unwrap();
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+    }
+
+    /// A version-3 database (Phase U1): migration 4 adds
+    /// seen_mails.unsubscribe_checked (default 0: every pre-existing row is
+    /// pending a header check) and sender_unsubscribe.source_internal_date
+    /// (NULL: capture date unknown) — existing rows survive untouched.
+    #[tokio::test]
+    async fn migrate_upgrades_a_version_3_database() {
+        let mut conn = memory_conn().await;
+        migrate(&mut conn).await.unwrap();
+        rewind_to(&mut conn, 3).await;
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', 'm1@example.com'), ('g2', NULL), ('mid:<m3@example.com>', 'm3@example.com')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO sender_unsubscribe (sender, https_url, one_click) \
+             VALUES ('a@example.com', 'https://news.example/u?tok=1', 1)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+        migrate(&mut conn).await.unwrap();
+
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+        // Every pre-existing row is unchecked — even ones the old
+        // message-id-only repair pass already populated (g1): their headers
+        // were never examined for unsubscribe data.
+        let unchecked: Vec<String> = sqlx::query_scalar(
+            "SELECT mail_id FROM seen_mails WHERE unsubscribe_checked = 0 ORDER BY mail_id",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(unchecked, vec!["g1", "g2", "mid:<m3@example.com>"]);
+        assert_eq!(
+            rfc_of(&mut conn, "g1").await.as_deref(),
+            Some("m1@example.com"),
+            "existing repairs survive"
+        );
+        let (url, source_ts): (Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT https_url, source_internal_date FROM sender_unsubscribe \
+             WHERE sender = 'a@example.com'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(url.as_deref(), Some("https://news.example/u?tok=1"));
+        assert_eq!(source_ts, None, "pre-U2 captures have no source date");
 
         // Running again is a no-op.
         migrate(&mut conn).await.unwrap();
@@ -1394,8 +1637,10 @@ mod tests {
         assert_eq!(mails, 2);
     }
 
-    /// The writer's unsubscribe upsert: one row per sender, latest message
-    /// wins wholesale (a later capture without a mailto clears the mailto).
+    /// The writer's unsubscribe upsert: one row per sender, latest *ingested*
+    /// message wins wholesale (a later capture without a mailto clears the
+    /// mailto, and even an older internalDate replaces the record — only the
+    /// backfill repair pass compares dates).
     #[tokio::test]
     async fn db_writer_upserts_unsubscribe_latest_wins() {
         let dir = tempfile::tempdir().unwrap();
@@ -1413,6 +1658,7 @@ mod tests {
                 mailto: Some("mailto:u@example.com".into()),
                 one_click: true,
             },
+            internal_date: Some(2_000),
         })
         .await
         .unwrap();
@@ -1423,6 +1669,7 @@ mod tests {
                 mailto: Some("mailto:stop@example.com".into()),
                 one_click: false,
             },
+            internal_date: None,
         })
         .await
         .unwrap();
@@ -1433,6 +1680,7 @@ mod tests {
                 mailto: None,
                 one_click: false,
             },
+            internal_date: Some(1_000),
         })
         .await
         .unwrap();
@@ -1440,9 +1688,16 @@ mod tests {
         writer.await.unwrap().unwrap();
 
         let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
-        type UnsubRow = (String, Option<String>, Option<String>, i64, i64);
+        type UnsubRow = (
+            String,
+            Option<String>,
+            Option<String>,
+            i64,
+            i64,
+            Option<i64>,
+        );
         let rows: Vec<UnsubRow> = sqlx::query_as(
-            "SELECT sender, https_url, mailto, one_click, run_id \
+            "SELECT sender, https_url, mailto, one_click, run_id, source_internal_date \
              FROM sender_unsubscribe ORDER BY sender",
         )
         .fetch_all(&mut conn)
@@ -1454,10 +1709,48 @@ mod tests {
         assert_eq!(rows[0].2, None, "latest capture replaces the whole record");
         assert_eq!(rows[0].3, 0);
         assert_eq!(rows[0].4, run_id);
+        assert_eq!(
+            rows[0].5,
+            Some(1_000),
+            "live ingestion wins regardless of internalDate"
+        );
         assert_eq!(rows[1].0, "b@example.com");
         assert_eq!(rows[1].1, None);
         assert_eq!(rows[1].2.as_deref(), Some("mailto:stop@example.com"));
         assert_eq!(rows[1].3, 0);
+        assert_eq!(rows[1].5, None);
+    }
+
+    /// Seen rows written by a live ingester are born unsubscribe-checked:
+    /// their headers were parsed at ingest time, so the repair pass never
+    /// fetches them.
+    #[tokio::test]
+    async fn db_writer_marks_seen_rows_unsubscribe_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        let run_id = create_run(&mut conn, "gmail_api", None).await.unwrap();
+
+        let (tx, rx) = mpsc::channel(16);
+        let writer = tokio::spawn(db_writer(conn, rx, run_id));
+        tx.send(WriteMsg::Seen(SeenMail {
+            message_id: "g1".into(),
+            sender: "a@example.com".into(),
+            rfc_message_id: Some("m1@example.com".into()),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+        writer.await.unwrap().unwrap();
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        let checked: i64 =
+            sqlx::query_scalar("SELECT unsubscribe_checked FROM seen_mails WHERE mail_id = 'g1'")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(checked, 1);
     }
 
     #[tokio::test]
@@ -1692,6 +1985,26 @@ mod tests {
             mail_id: mail_id.into(),
             rfc_message_id: rfc.map(str::to_string),
             sender: sender.into(),
+            unsubscribe: None,
+            internal_date: None,
+        }
+    }
+
+    fn backfill_unsub(
+        mail_id: &str,
+        rfc: Option<&str>,
+        sender: &str,
+        https_url: &str,
+        internal_date: Option<i64>,
+    ) -> BackfillMsg {
+        BackfillMsg {
+            unsubscribe: Some(UnsubscribeCapture {
+                https_url: Some(https_url.to_string()),
+                mailto: None,
+                one_click: false,
+            }),
+            internal_date,
+            ..backfill(mail_id, rfc, sender)
         }
     }
 
@@ -1735,6 +2048,7 @@ mod tests {
                 populated: 2,
                 missing_id: 1,
                 decremented: 2,
+                unsubscribe_recorded: 0,
                 already_done: 0,
             }
         );
@@ -1751,10 +2065,12 @@ mod tests {
             Some("m2@example.com")
         );
         assert_eq!(rfc_of(&mut conn, "g3").await.as_deref(), Some(""));
-        // Nothing is left for a second run to fetch.
+        // Nothing is left for a second run to fetch: every repaired row is
+        // also marked unsubscribe-checked in the same transaction.
         let pending: i64 = sqlx::query_scalar(
             "SELECT count(1) FROM seen_mails \
-             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%'",
+             WHERE mail_id NOT LIKE 'mid:%' \
+             AND (rfc_message_id IS NULL OR unsubscribe_checked = 0)",
         )
         .fetch_one(&mut conn)
         .await
@@ -1799,10 +2115,11 @@ mod tests {
         assert_eq!(sender_count(&mut conn, "b@example.com").await, Some(2));
         assert_eq!(rfc_of(&mut conn, "g2").await, None);
 
-        // The next run's NULL-row query finds exactly the remainder.
+        // The next run's pending query finds exactly the remainder.
         let pending: Vec<String> = sqlx::query_scalar(
             "SELECT mail_id FROM seen_mails \
-             WHERE rfc_message_id IS NULL AND mail_id NOT LIKE 'mid:%' ORDER BY mail_id",
+             WHERE mail_id NOT LIKE 'mid:%' \
+             AND (rfc_message_id IS NULL OR unsubscribe_checked = 0) ORDER BY mail_id",
         )
         .fetch_all(&mut conn)
         .await
@@ -1854,6 +2171,190 @@ mod tests {
             Some(0),
             "count must never go below zero"
         );
+    }
+
+    async fn unsubscribe_row(
+        conn: &mut SqliteConnection,
+        sender: &str,
+    ) -> Option<(Option<String>, Option<i64>)> {
+        sqlx::query_as(
+            "SELECT https_url, source_internal_date FROM sender_unsubscribe WHERE sender = ?",
+        )
+        .bind(sender)
+        .fetch_optional(conn)
+        .await
+        .unwrap()
+    }
+
+    async fn checked_of(conn: &mut SqliteConnection, mail_id: &str) -> i64 {
+        sqlx::query_scalar("SELECT unsubscribe_checked FROM seen_mails WHERE mail_id = ?")
+            .bind(mail_id)
+            .fetch_one(conn)
+            .await
+            .unwrap()
+    }
+
+    /// The U2 half of the repair: unsubscribe captures are recorded and rows
+    /// are marked checked — including rows the old message-id-only pass had
+    /// already populated — and rows without capture are checked without
+    /// creating records. Replaying everything is a no-op.
+    #[tokio::test]
+    async fn backfill_records_unsubscribe_and_marks_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        // g1: never repaired at all; g2: Message-ID populated by the old
+        // pass but headers never unsubscribe-checked; g3: no capture data.
+        sqlx::query(
+            "INSERT INTO seen_mails (mail_id, rfc_message_id) VALUES \
+             ('g1', NULL), ('g2', 'm2@example.com'), ('g3', NULL)",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let msgs = || {
+            vec![
+                backfill_unsub(
+                    "g1",
+                    Some("m1@example.com"),
+                    "a@example.com",
+                    "https://a.example/u?tok=1",
+                    Some(100),
+                ),
+                backfill_unsub(
+                    "g2",
+                    Some("m2@example.com"),
+                    "b@example.com",
+                    "https://b.example/u?tok=2",
+                    Some(200),
+                ),
+                backfill("g3", None, "c@example.com"),
+            ]
+        };
+        let outcome = run_backfill_batch(&options, msgs()).await;
+        assert_eq!(
+            outcome,
+            BackfillOutcome {
+                examined: 3,
+                populated: 1,
+                missing_id: 1,
+                decremented: 0,
+                unsubscribe_recorded: 2,
+                already_done: 0,
+            }
+        );
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(
+            unsubscribe_row(&mut conn, "a@example.com").await,
+            Some((Some("https://a.example/u?tok=1".into()), Some(100)))
+        );
+        assert_eq!(
+            unsubscribe_row(&mut conn, "b@example.com").await,
+            Some((Some("https://b.example/u?tok=2".into()), Some(200)))
+        );
+        assert_eq!(
+            unsubscribe_row(&mut conn, "c@example.com").await,
+            None,
+            "no capture, no record"
+        );
+        for mail_id in ["g1", "g2", "g3"] {
+            assert_eq!(checked_of(&mut conn, mail_id).await, 1, "{mail_id}");
+        }
+
+        // Replaying the same results (a crashed run's retry) is a no-op.
+        let outcome = run_backfill_batch(&options, msgs()).await;
+        assert_eq!(outcome.already_done, 3);
+        assert_eq!(outcome.unsubscribe_recorded, 0);
+        assert_eq!(
+            unsubscribe_row(&mut conn, "a@example.com").await,
+            Some((Some("https://a.example/u?tok=1".into()), Some(100)))
+        );
+    }
+
+    /// The backfill iterates in mail_id order, not chronological order: an
+    /// older message must not clobber a newer message's capture, and a
+    /// record from live ingestion (no source_internal_date) is never
+    /// replaced by the historical pass. The rows are still marked checked.
+    #[tokio::test]
+    async fn backfill_prefers_newer_internal_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        sqlx::query("INSERT INTO seen_mails (mail_id) VALUES ('ga'), ('gb'), ('gc'), ('gi')")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        // A capture from live ingestion (mbox import): no source date.
+        sqlx::query(
+            "INSERT INTO sender_unsubscribe (sender, https_url) \
+             VALUES ('imported@example.com', 'https://imp.example/u?tok=live')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let outcome = run_backfill_batch(
+            &options,
+            vec![
+                // Same sender, out of chronological order: 500, then 100
+                // (older — skipped), then 900 (newer — replaces).
+                backfill_unsub(
+                    "ga",
+                    None,
+                    "a@example.com",
+                    "https://a.example/u?d=500",
+                    Some(500),
+                ),
+                backfill_unsub(
+                    "gb",
+                    None,
+                    "a@example.com",
+                    "https://a.example/u?d=100",
+                    Some(100),
+                ),
+                backfill_unsub(
+                    "gc",
+                    None,
+                    "a@example.com",
+                    "https://a.example/u?d=900",
+                    Some(900),
+                ),
+                // Live-captured sender: left alone.
+                backfill_unsub(
+                    "gi",
+                    None,
+                    "imported@example.com",
+                    "https://imp.example/u?tok=backfill",
+                    Some(900),
+                ),
+            ],
+        )
+        .await;
+        assert_eq!(
+            outcome.unsubscribe_recorded, 2,
+            "d=500 insert + d=900 overwrite"
+        );
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        assert_eq!(
+            unsubscribe_row(&mut conn, "a@example.com").await,
+            Some((Some("https://a.example/u?d=900".into()), Some(900)))
+        );
+        assert_eq!(
+            unsubscribe_row(&mut conn, "imported@example.com").await,
+            Some((Some("https://imp.example/u?tok=live".into()), None)),
+            "live ingestion's capture must survive the historical pass"
+        );
+        // Every visited row is checked regardless — none is fetched again.
+        for mail_id in ["ga", "gb", "gc", "gi"] {
+            assert_eq!(checked_of(&mut conn, mail_id).await, 1, "{mail_id}");
+        }
     }
 
     #[test]

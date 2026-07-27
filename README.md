@@ -114,13 +114,15 @@ which stays correct thanks to the dedupe.
 
 ## Unsubscribing from senders
 
-The mbox importer also captures each message's `List-Unsubscribe` /
-`List-Unsubscribe-Post` headers (RFC 2369 / RFC 8058) and stores the latest
+Both ingesters capture each message's `List-Unsubscribe` /
+`List-Unsubscribe-Post` headers (RFC 2369 / RFC 8058) and store the latest
 valid targets per sender — unsubscribe URLs embed per-recipient tokens, so the
-newest message's link is the one most likely to still work. Re-running an
-import over an existing database back-populates this data without changing
-any counts. (Capture during live API scans is planned as a follow-up; until
-then, scanned-only senders won't show the affordance.)
+newest message's link is the one most likely to still work. Live API scans
+capture this automatically for every newly seen message; re-running an mbox
+import over an existing database back-populates the data without changing any
+counts; and for messages scanned *before* capture existed, running the
+[repair pass](#repairing-cross-source-duplicates) (`scan --backfill`) once
+fetches their headers and fills in the history.
 
 In the web viewer, senders with captured data get an **Unsubscribe** control
 on their row: a one-click (RFC 8058) sender gets a button that sends the
@@ -149,27 +151,34 @@ database that mixed such scans with an import may hold double counts. Repair
 it once with:
 
 ```console
-$ cargo run -- scan --backfill-message-ids
+$ cargo run -- scan --backfill
 ```
 
+(`--backfill-message-ids`, the original name, still works as an alias.)
+
 This is a normal ingest run (it takes the same lock, writes a run row, and
-shows progress in the web viewer). It fetches just the missing `Message-ID`
-headers over the Gmail API — using the same OAuth credentials, rate limiting,
-and retries as a scan — then collapses every message found in both sources by
-decrementing the affected sender count once per duplicate. It is idempotent
-and resumable: interrupt it any time and re-run the same command to continue;
-a fully repaired database finishes immediately without touching the network.
-The web viewer's duplicate-counts banner disappears once the repair is
-complete.
+shows progress in the web viewer). For every previously scanned message that
+still needs it, it fetches just the message's headers over the Gmail API —
+`Message-ID` plus the `List-Unsubscribe` headers, using the same OAuth
+credentials, rate limiting, and retries as a scan — then collapses every
+message found in both sources by decrementing the affected sender count once
+per duplicate, and records per-sender unsubscribe targets for mail scanned
+before capture existed (preferring the newest message's link when it can tell
+by date). Each row is marked checked once its headers have been examined, so
+the pass is idempotent and resumable: interrupt it any time and re-run the
+same command to continue; a fully repaired database finishes immediately
+without touching the network. The web viewer's duplicate-counts banner
+disappears once the repair is complete.
 
 ## Command line
 
 ```
 gmail_stats [scan] [OPTIONS]           scan Gmail over the API (OAuth; the default)
 gmail_stats import <PATH> [OPTIONS]    import a Google Takeout mbox export
-gmail_stats scan --backfill-message-ids [OPTIONS]
-                                       fetch Message-IDs for earlier scans and collapse
-                                       cross-source duplicate counts (idempotent)
+gmail_stats scan --backfill [OPTIONS]  fetch Message-ID and List-Unsubscribe headers for
+                                       earlier scans, collapse cross-source duplicate
+                                       counts, and capture unsubscribe targets (idempotent;
+                                       --backfill-message-ids is an accepted alias)
 
 --db <PATH>            SQLite database path        [env: GMAIL_STATS_DB] [default: stats.db]
 --credentials <PATH>   OAuth client secret (scan)  [env: GMAIL_STATS_CREDENTIALS] [default: credentials.json]
