@@ -53,7 +53,9 @@ th, td { text-align: left; padding: 0.45rem 0.75rem; border-top: 1px solid var(-
 thead th { border-top: none; background: var(--card); font-size: 0.8rem;
            text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-td.sender { overflow-wrap: anywhere; }
+/* user-select: all makes a single click select exactly the address text, so
+   copy/paste never picks up the whitespace browsers insert at cell boundaries */
+td.sender { overflow-wrap: anywhere; user-select: all; cursor: pointer; }
 
 .notice {
   background: var(--card);
