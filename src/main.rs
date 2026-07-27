@@ -56,6 +56,10 @@ OPTIONS:
                            [env: GMAIL_STATS_CREDENTIALS] [default: credentials.json]
     --tokens <PATH>        OAuth token cache file (scan only)
                            [env: GMAIL_STATS_TOKENS] [default: tokencache.json]
+    --oauth-port <PORT>    fixed localhost port for the OAuth consent redirect;
+                           http://localhost:<PORT> must be an authorized
+                           redirect URI on the OAuth client (scan only)
+                           [env: GMAIL_STATS_OAUTH_PORT] [default: 8085]
     --resume <RUN_ID>      resume an earlier run of the same kind.
                            import: continue from the recorded byte offset,
                            falling back to a full re-parse if the file changed;
@@ -115,9 +119,15 @@ struct Config {
     db: PathBuf,
     credentials: PathBuf,
     tokens: PathBuf,
+    oauth_port: u16,
     verbosity: Verbosity,
     mode: Mode,
 }
+
+/// Default localhost port for the OAuth consent redirect. A fixed port keeps
+/// the redirect URI stable so it can be preconfigured on the OAuth client;
+/// the ephemeral-port flow breaks clients that require exact redirect URIs.
+const DEFAULT_OAUTH_PORT: u16 = 8085;
 
 #[derive(Debug)]
 enum ParsedArgs {
@@ -132,6 +142,7 @@ fn parse_args(
     let mut db = None;
     let mut credentials = None;
     let mut tokens = None;
+    let mut oauth_port = None;
     let mut quiet = false;
     let mut verbose = false;
     let mut resume = None;
@@ -154,6 +165,7 @@ fn parse_args(
             "--db" => db = Some(take_value("--db")?),
             "--credentials" => credentials = Some(take_value("--credentials")?),
             "--tokens" => tokens = Some(take_value("--tokens")?),
+            "--oauth-port" => oauth_port = Some(take_value("--oauth-port")?),
             "--resume" => {
                 let v = take_value("--resume")?;
                 resume = Some(
@@ -214,10 +226,18 @@ fn parse_args(
             .unwrap_or_else(|| PathBuf::from(default))
     };
 
+    let oauth_port = match oauth_port.or_else(|| env("GMAIL_STATS_OAUTH_PORT")) {
+        None => DEFAULT_OAUTH_PORT,
+        Some(v) => v.parse::<u16>().ok().filter(|p| *p != 0).ok_or_else(|| {
+            format!("--oauth-port / GMAIL_STATS_OAUTH_PORT expects 1-65535, got {v:?}")
+        })?,
+    };
+
     Ok(ParsedArgs::Run(Config {
         db: pick(db, "GMAIL_STATS_DB", "stats.db"),
         credentials: pick(credentials, "GMAIL_STATS_CREDENTIALS", "credentials.json"),
         tokens: pick(tokens, "GMAIL_STATS_TOKENS", "tokencache.json"),
+        oauth_port,
         verbosity: if quiet {
             Verbosity::Quiet
         } else if verbose {
@@ -720,7 +740,7 @@ async fn run_scan(
     // web viewer can offer an "Authorize in Google" link for spawned runs.
     let auth = match yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
-        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPPortRedirect(cfg.oauth_port),
     )
     .persist_tokens_to_disk(cfg.tokens.clone())
     .flow_delegate(Box::new(RunRowAuthDelegate {
@@ -759,7 +779,14 @@ async fn run_scan(
     if let Err(e) = consent_within(auth.token(&scopes), auth_timeout).await {
         drop(write_tx);
         let _ = writer_handle.await;
-        let msg = format!("{e:#}");
+        let mut msg = format!("{e:#}");
+        if msg.contains("in use") {
+            msg.push_str(&format!(
+                " (the OAuth redirect listener wants localhost:{} — free the port, or pick \
+                 another with --oauth-port and add it to the OAuth client's redirect URIs)",
+                cfg.oauth_port
+            ));
+        }
         ingest::finish_run(
             options,
             run_id,
@@ -1096,8 +1123,8 @@ async fn present_auth_url(
     }
     if need_code {
         // Parity with yup-oauth2's default delegate: interactive fallback
-        // reads the code from stdin. Spawned runs use HTTPRedirect
-        // (need_code=false) and have stdin null, so this path is
+        // reads the code from stdin. Spawned runs use the port-redirect
+        // flow (need_code=false) and have stdin null, so this path is
         // terminal-only.
         if chatty() {
             println!(
@@ -1613,7 +1640,7 @@ async fn run_backfill(
     };
     let auth = match yup_oauth2::InstalledFlowAuthenticator::builder(
         secret,
-        yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+        yup_oauth2::InstalledFlowReturnMethod::HTTPPortRedirect(cfg.oauth_port),
     )
     .persist_tokens_to_disk(cfg.tokens.clone())
     .build()
@@ -2237,6 +2264,29 @@ mod tests {
     }
 
     #[test]
+    fn oauth_port_defaults_flag_env_and_precedence() {
+        assert_eq!(run_cfg(&[], no_env).oauth_port, DEFAULT_OAUTH_PORT);
+        assert_eq!(run_cfg(&["--oauth-port", "9123"], no_env).oauth_port, 9123);
+        let env = |name: &str| (name == "GMAIL_STATS_OAUTH_PORT").then(|| "7001".to_string());
+        assert_eq!(run_cfg(&[], env).oauth_port, 7001);
+        // The flag wins over the env var.
+        assert_eq!(run_cfg(&["--oauth-port=9123"], env).oauth_port, 9123);
+    }
+
+    #[test]
+    fn oauth_port_rejects_non_ports() {
+        for bad in ["0", "65536", "-1", "http", ""] {
+            let args = ["--oauth-port".to_string(), bad.to_string()];
+            assert!(
+                parse_args(args, no_env).is_err(),
+                "expected port {bad:?} to be rejected"
+            );
+        }
+        let env = |name: &str| (name == "GMAIL_STATS_OAUTH_PORT").then(|| "nope".to_string());
+        assert!(parse_args(std::iter::empty::<String>(), env).is_err());
+    }
+
+    #[test]
     fn help_flag_wins() {
         assert!(matches!(
             parse_args(["--help".to_string()], no_env),
@@ -2526,7 +2576,7 @@ mod tests {
         };
         let url = "https://accounts.google.com/o/oauth2/auth?client_id=x&redirect_uri=y";
         let code = delegate.present_user_url(url, false).await.unwrap();
-        assert_eq!(code, "", "HTTPRedirect mode returns no code");
+        assert_eq!(code, "", "redirect mode returns no code");
 
         // Let the writer drain the awaiting_auth message, then check the row.
         tx.send(WriteMsg::Progress {
