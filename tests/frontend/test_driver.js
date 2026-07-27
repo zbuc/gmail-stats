@@ -78,6 +78,66 @@ async function run() {
       pillHidden: hidden("ingest-pill"),
       panelHidden: hidden("ingest-panel"),
       historyHidden: hidden("history"),
+      // Demo summary.json carries no unsubscribe fields, so the affordance
+      // must be absent everywhere.
+      unsubControls: document.querySelectorAll(".unsub").length,
+    });
+    return;
+  }
+
+  if (SCENARIO === "unsubscribe") {
+    // The unsubscribe affordance (issue #41): rendered per sender row only
+    // when /api/summary carries data, hostile schemes inert, one-click behind
+    // a confirm that names the target domain. window.confirm is stubbed to
+    // capture messages and refuse, so no unsubscribe request ever fires.
+    const confirms = [];
+    window.confirm = message => {
+      confirms.push(String(message));
+      return false;
+    };
+    await waitFor(
+      () => !document.getElementById("stats").classList.contains("hidden"),
+      "stats view",
+    );
+    const cells = {};
+    for (const tr of document.querySelectorAll("#sender-rows tr")) {
+      cells[tr.querySelector("td.sender").textContent] = tr.querySelector("td.act");
+    }
+    const describe = cell => {
+      const btn = cell.querySelector("button.unsub-btn");
+      const link = cell.querySelector("a.unsub-link");
+      const inert = cell.querySelector(".unsub-inert");
+      return {
+        hasButton: Boolean(btn),
+        hasLink: Boolean(link),
+        href: link ? link.getAttribute("href") : null,
+        target: link ? link.getAttribute("target") : null,
+        rel: link ? link.getAttribute("rel") : null,
+        inertText: inert ? inert.textContent : null,
+        anchors: cell.querySelectorAll("a").length,
+      };
+    };
+
+    const oneclick = describe(cells["oneclick@example.com"]);
+    cells["oneclick@example.com"].querySelector("button.unsub-btn").click();
+    const oneclickConfirm = confirms.length === 1 ? confirms[0] : null;
+
+    const link = describe(cells["link@example.com"]);
+    cells["link@example.com"].querySelector("a.unsub-link").click();
+    const linkConfirm = confirms.length === 2 ? confirms[1] : null;
+
+    report({
+      scenario: SCENARIO,
+      oneclick,
+      oneclickConfirm,
+      link,
+      linkConfirm,
+      mailto: describe(cells["mailto@example.com"]),
+      plain: describe(cells["plain@example.com"]),
+      evilJs: describe(cells["evil-js@example.com"]),
+      evilHttp: describe(cells["evil-http@example.com"]),
+      evilData: describe(cells["evil-data@example.com"]),
+      stillOnPage: location.pathname === "/",
     });
     return;
   }

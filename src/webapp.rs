@@ -292,9 +292,17 @@ async fn build_summary(pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Err
     .fetch_all(pool)
     .await?;
 
+    let unsubscribe = fetch_unsubscribe_map(pool).await?;
+
     let senders: Vec<serde_json::Value> = rows
         .into_iter()
-        .map(|(sender, mails_sent)| json!({ "sender": sender, "mails_sent": mails_sent }))
+        .map(|(sender, mails_sent)| {
+            let mut row = json!({ "sender": sender, "mails_sent": mails_sent });
+            if let Some(unsub) = unsubscribe.get(&sender) {
+                row["unsubscribe"] = unsub.clone();
+            }
+            row
+        })
         .collect();
 
     Ok(json!({
@@ -302,6 +310,53 @@ async fn build_summary(pool: &SqlitePool) -> Result<serde_json::Value, sqlx::Err
         "senders": senders,
         "generated_at_unix": now_unix(),
     }))
+}
+
+/// Per-sender unsubscribe objects for the summary (issue #41): `{url?,
+/// mailto?, one_click}`, keyed by the same TEXT-cast sender string the summary
+/// groups by. Rows with no usable target are dropped so the summary field can
+/// simply be omitted. A database from before migration 3 has no
+/// sender_unsubscribe table — treated as "nothing captured", exactly like
+/// earlier phases handle pre-migration databases, so the viewer never 5xxs
+/// over it.
+async fn fetch_unsubscribe_map(
+    pool: &SqlitePool,
+) -> Result<HashMap<String, serde_json::Value>, sqlx::Error> {
+    let rows: Vec<(String, Option<String>, Option<String>, i64)> = match sqlx::query_as(
+        "SELECT CAST(sender AS TEXT) AS sender, https_url, mailto, one_click \
+         FROM sender_unsubscribe",
+    )
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            return match classify_db_error(&err) {
+                DbErrorKind::MissingTable | DbErrorKind::MissingColumn => Ok(HashMap::new()),
+                _ => Err(err),
+            }
+        }
+    };
+    let mut map = HashMap::new();
+    for (sender, https_url, mailto, one_click) in rows {
+        let mut unsub = serde_json::Map::new();
+        if let Some(url) = https_url {
+            unsub.insert("url".into(), json!(url));
+        }
+        if let Some(mailto) = mailto {
+            unsub.insert("mailto".into(), json!(mailto));
+        }
+        if unsub.is_empty() {
+            continue;
+        }
+        // one_click is only meaningful with an https target (RFC 8058).
+        unsub.insert(
+            "one_click".into(),
+            json!(one_click != 0 && unsub.contains_key("url")),
+        );
+        map.insert(sender, serde_json::Value::Object(unsub));
+    }
+    Ok(map)
 }
 
 // ---------------------------------------------------------------------------
@@ -1387,6 +1442,110 @@ mod tests {
         assert_eq!(senders[0]["mails_sent"], 5);
     }
 
+    // -- unsubscribe surface (issue #41) ------------------------------------
+
+    /// Sender rows carry `unsubscribe {url?, mailto?, one_click}` exactly when
+    /// something was captured; the field is omitted entirely otherwise.
+    #[tokio::test]
+    async fn summary_includes_unsubscribe_only_when_captured() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "CREATE TABLE sender_unsubscribe (
+               sender TEXT PRIMARY KEY, https_url TEXT, mailto TEXT,
+               one_click INTEGER NOT NULL DEFAULT 0,
+               run_id INTEGER, updated_at_unix INTEGER NOT NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO senders VALUES ('a@b.com', 9), ('c@d.com', 5), ('e@f.com', 2)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO sender_unsubscribe (sender, https_url, mailto, one_click) VALUES \
+             ('a@b.com', 'https://news.example/u?t=1', NULL, 1), \
+             ('c@d.com', NULL, 'mailto:stop@example.com', 0), \
+             ('ghost@example.com', 'https://ghost.example/u', NULL, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_summary(&pool).await.unwrap();
+        let senders = summary["senders"].as_array().unwrap();
+        assert_eq!(senders.len(), 3);
+        assert_eq!(
+            senders[0]["unsubscribe"],
+            json!({ "url": "https://news.example/u?t=1", "one_click": true })
+        );
+        assert_eq!(
+            senders[1]["unsubscribe"],
+            json!({ "mailto": "mailto:stop@example.com", "one_click": false })
+        );
+        // No capture: the field is absent, not null.
+        assert!(
+            !senders[2].as_object().unwrap().contains_key("unsubscribe"),
+            "senders without capture must omit the field: {:?}",
+            senders[2]
+        );
+    }
+
+    /// A one_click flag without an https URL (hand-edited or corrupted row)
+    /// is neutralized on the way out — RFC 8058 one-click means POST to the
+    /// https target.
+    #[tokio::test]
+    async fn summary_neutralizes_one_click_without_https() {
+        let pool = memory_pool().await;
+        sqlx::query(
+            "CREATE TABLE sender_unsubscribe (
+               sender TEXT PRIMARY KEY, https_url TEXT, mailto TEXT,
+               one_click INTEGER NOT NULL DEFAULT 0,
+               run_id INTEGER, updated_at_unix INTEGER NOT NULL DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO senders VALUES ('a@b.com', 3), ('empty@b.com', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO sender_unsubscribe (sender, https_url, mailto, one_click) VALUES \
+             ('a@b.com', NULL, 'mailto:u@example.com', 1), \
+             ('empty@b.com', NULL, NULL, 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let summary = build_summary(&pool).await.unwrap();
+        let senders = summary["senders"].as_array().unwrap();
+        assert_eq!(
+            senders[0]["unsubscribe"],
+            json!({ "mailto": "mailto:u@example.com", "one_click": false })
+        );
+        // A row with no target at all yields no field.
+        assert!(!senders[1].as_object().unwrap().contains_key("unsubscribe"));
+    }
+
+    /// A database from before migration 3 (no sender_unsubscribe table) must
+    /// keep serving the summary — no field, no 5xx.
+    #[tokio::test]
+    async fn summary_survives_a_pre_unsubscribe_database() {
+        let pool = memory_pool().await; // baseline tables only
+        sqlx::query("INSERT INTO senders VALUES ('a@b.com', 3)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let summary = build_summary(&pool)
+            .await
+            .expect("pre-migration database must not error");
+        let senders = summary["senders"].as_array().unwrap();
+        assert_eq!(senders.len(), 1);
+        assert!(!senders[0].as_object().unwrap().contains_key("unsubscribe"));
+    }
+
     // -- Phase B endpoint tests ---------------------------------------------
 
     /// Build a real on-disk database with Phase A's actual DDL (via
@@ -1437,6 +1596,52 @@ mod tests {
 
     fn app_for(db_path: &Path) -> Router {
         build_router(Arc::new(AppState::new(db_path)))
+    }
+
+    /// End-to-end over HTTP: a migrated database serves the unsubscribe field,
+    /// and a pre-migration file database (baseline tables, no
+    /// sender_unsubscribe) still answers 200 with the field absent.
+    #[tokio::test]
+    async fn summary_endpoint_handles_migrated_and_pre_migration_dbs() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = migrated_db(&dir).await;
+        exec(
+            &db_path,
+            "INSERT INTO senders VALUES ('a@b.com', 4);
+             INSERT INTO sender_unsubscribe (sender, https_url, one_click)
+               VALUES ('a@b.com', 'https://news.example/u', 1);",
+        )
+        .await;
+        let (status, body) = get_json(app_for(&db_path), "/api/summary").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["senders"][0]["unsubscribe"],
+            json!({ "url": "https://news.example/u", "one_click": true })
+        );
+
+        // Pre-migration database: baseline tables only.
+        let old_path = dir.path().join("old.db");
+        let options = SqliteConnectOptions::new()
+            .filename(&old_path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE seen_mails (mail_id string);
+             CREATE TABLE senders (sender string, mails_sent int);
+             INSERT INTO senders VALUES ('old@b.com', 2);",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.ok();
+        let (status, body) = get_json(app_for(&old_path), "/api/summary").await;
+        assert_eq!(status, StatusCode::OK, "pre-migration db must not 5xx");
+        assert_eq!(body["senders"][0]["sender"], "old@b.com");
+        assert!(!body["senders"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("unsubscribe"));
     }
 
     #[tokio::test]

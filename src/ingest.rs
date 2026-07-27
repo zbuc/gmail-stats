@@ -16,8 +16,9 @@ use tokio::time::MissedTickBehavior;
 /// `PRAGMA user_version`. The pre-versioning tables (`seen_mails`, `senders`)
 /// are the version-0 baseline; migration 1 adds `ingest_runs`; migration 2
 /// adds `seen_mails.rfc_message_id` for cross-source dedupe (issue #26
-/// Phase D).
-pub const SCHEMA_VERSION: i64 = 2;
+/// Phase D); migration 3 adds `sender_unsubscribe` for per-sender
+/// List-Unsubscribe capture (issue #41 Phase U1).
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub fn now_unix() -> i64 {
     SystemTime::now()
@@ -151,6 +152,33 @@ pub async fn migrate(conn: &mut SqliteConnection) -> anyhow::Result<()> {
         tx.commit().await?;
     }
 
+    if version < 3 {
+        // Migration 3: per-sender List-Unsubscribe capture (issue #41 Phase
+        // U1). One row per sender key (same cleaned form as `senders.sender`),
+        // holding the most recently ingested message's targets: unsubscribe
+        // URLs embed per-recipient tokens, so the newest is likeliest valid.
+        // run_id + updated_at_unix record which ingest run last wrote the row
+        // and when — the "latest wins" ordering is ingestion order, enforced
+        // by the single writer's unconditional upsert.
+        let mut tx = conn.begin().await?;
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS sender_unsubscribe (
+               sender          TEXT PRIMARY KEY,
+               https_url       TEXT,
+               mailto          TEXT,
+               one_click       INTEGER NOT NULL DEFAULT 0,
+               run_id          INTEGER,
+               updated_at_unix INTEGER NOT NULL DEFAULT 0
+             )",
+        )
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("PRAGMA user_version = 3")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+
     Ok(())
 }
 
@@ -174,6 +202,82 @@ pub fn normalize_rfc_message_id(raw: &str) -> Option<String> {
     } else {
         Some(inner.to_string())
     }
+}
+
+/// Cap on a single captured unsubscribe target. Anything longer is treated as
+/// malformed and skipped (the unfolded header itself is already capped at 8 KiB
+/// by the mbox parser; this bounds what lands in the database and the UI).
+pub const MAX_UNSUBSCRIBE_TARGET_BYTES: usize = 2048;
+
+/// Validated per-sender unsubscribe targets parsed out of one message's
+/// `List-Unsubscribe` / `List-Unsubscribe-Post` headers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnsubscribeCapture {
+    pub https_url: Option<String>,
+    pub mailto: Option<String>,
+    /// RFC 8058 one-click: `List-Unsubscribe-Post` contained
+    /// `List-Unsubscribe=One-Click` AND an https target exists (the spec
+    /// requires the POST to go to the https URL).
+    pub one_click: bool,
+}
+
+/// Parse a message's `List-Unsubscribe` (and optional `List-Unsubscribe-Post`)
+/// header values into validated targets. Shared by every ingester so capture
+/// behaves identically across sources.
+///
+/// `List-Unsubscribe` (RFC 2369) is a comma-separated list of `<URL>` entries;
+/// the first valid `https:` and the first valid `mailto:` entry win. Header
+/// values are attacker-controlled, so validation is strict: only bracketed
+/// entries are considered, an entry must be printable ASCII with no embedded
+/// whitespace, at most [`MAX_UNSUBSCRIBE_TARGET_BYTES`] long, and carry one of
+/// exactly those two schemes (ASCII case-insensitive). Anything malformed is
+/// skipped — never an error — and a message yielding no valid target returns
+/// `None` (which leaves any previously captured record for the sender alone).
+pub fn parse_unsubscribe_headers(
+    list_unsubscribe: Option<&str>,
+    list_unsubscribe_post: Option<&str>,
+) -> Option<UnsubscribeCapture> {
+    let raw = list_unsubscribe?;
+    let mut https_url: Option<String> = None;
+    let mut mailto: Option<String> = None;
+
+    // Walk `<...>` bracketed entries. Commas are only separators *between*
+    // entries, so splitting on brackets (not commas) keeps URLs containing
+    // commas intact.
+    let mut rest = raw;
+    while let Some(open) = rest.find('<') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('>') else { break };
+        let entry = after[..close].trim();
+        rest = &after[close + 1..];
+        if entry.is_empty()
+            || entry.len() > MAX_UNSUBSCRIBE_TARGET_BYTES
+            || !entry.bytes().all(|b| (0x21..=0x7e).contains(&b))
+        {
+            continue;
+        }
+        let lower = entry.to_ascii_lowercase();
+        if https_url.is_none() && lower.starts_with("https://") && entry.len() > "https://".len() {
+            https_url = Some(entry.to_string());
+        } else if mailto.is_none() && lower.starts_with("mailto:") && entry.len() > "mailto:".len()
+        {
+            mailto = Some(entry.to_string());
+        }
+    }
+
+    if https_url.is_none() && mailto.is_none() {
+        return None;
+    }
+    let one_click = https_url.is_some()
+        && list_unsubscribe_post.is_some_and(|post| {
+            post.to_ascii_lowercase()
+                .contains("list-unsubscribe=one-click")
+        });
+    Some(UnsubscribeCapture {
+        https_url,
+        mailto,
+        one_click,
+    })
 }
 
 /// Where the ingest lockfile for a given database lives: right next to it.
@@ -316,6 +420,15 @@ pub struct SeenMail {
 /// through here so single-writer discipline holds.
 pub enum WriteMsg {
     Seen(SeenMail),
+    /// A parsed message carried valid List-Unsubscribe data: upsert the
+    /// sender's record, latest message wins. Sent for *every* parsed message
+    /// with such data — including ones the seen-dedupe skips for counting —
+    /// so re-ingesting an already-imported mailbox back-populates the table
+    /// with zero count changes.
+    Unsubscribe {
+        sender: String,
+        capture: UnsubscribeCapture,
+    },
     Progress {
         messages_seen: u64,
         /// Import only: committed parse offset (doubles as the resume point).
@@ -385,6 +498,29 @@ pub async fn db_writer(
                         }
                     }
                     tx.commit().await?;
+                }
+                Some(WriteMsg::Unsubscribe { sender, capture }) => {
+                    // Unconditional upsert: ingestion order is the "latest
+                    // message wins" order, and a single statement is atomic.
+                    sqlx::query(
+                        "INSERT INTO sender_unsubscribe \
+                         (sender, https_url, mailto, one_click, run_id, updated_at_unix) \
+                         VALUES (?, ?, ?, ?, ?, ?) \
+                         ON CONFLICT(sender) DO UPDATE SET \
+                           https_url = excluded.https_url, \
+                           mailto = excluded.mailto, \
+                           one_click = excluded.one_click, \
+                           run_id = excluded.run_id, \
+                           updated_at_unix = excluded.updated_at_unix",
+                    )
+                    .bind(&sender)
+                    .bind(&capture.https_url)
+                    .bind(&capture.mailto)
+                    .bind(capture.one_click as i64)
+                    .bind(run_id)
+                    .bind(now_unix())
+                    .execute(&mut conn)
+                    .await?;
                 }
                 Some(WriteMsg::Progress { messages_seen, bytes_done, resume_token, total_estimate }) => {
                     sqlx::query(
@@ -779,6 +915,7 @@ mod tests {
         assert!(table_exists(&mut conn, "seen_mails").await);
         assert!(table_exists(&mut conn, "senders").await);
         assert!(table_exists(&mut conn, "ingest_runs").await);
+        assert!(table_exists(&mut conn, "sender_unsubscribe").await);
         assert!(index_exists(&mut conn, "seen_mails_rfc_message_id").await);
         assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
         // The column is usable on a fresh database.
@@ -895,6 +1032,43 @@ mod tests {
         assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
     }
 
+    /// A version-2 database (Phase D, pre-#41): migration 3 adds the
+    /// sender_unsubscribe table and nothing else — existing data untouched.
+    #[tokio::test]
+    async fn migrate_upgrades_a_version_2_database() {
+        let mut conn = memory_conn().await;
+        migrate(&mut conn).await.unwrap();
+        // Rewind to version 2 the way a v2 binary left things.
+        sqlx::query("DROP TABLE sender_unsubscribe")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA user_version = 2")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO senders (sender, mails_sent) VALUES ('a@example.com', 7)")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+
+        migrate(&mut conn).await.unwrap();
+
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+        assert!(table_exists(&mut conn, "sender_unsubscribe").await);
+        let mails: i64 = sqlx::query("SELECT mails_sent FROM senders WHERE sender='a@example.com'")
+            .fetch_one(&mut conn)
+            .await
+            .unwrap()
+            .try_get("mails_sent")
+            .unwrap();
+        assert_eq!(mails, 7);
+
+        // Running again is a no-op.
+        migrate(&mut conn).await.unwrap();
+        assert_eq!(user_version(&mut conn).await, SCHEMA_VERSION);
+    }
+
     #[test]
     fn normalize_rfc_message_id_variants() {
         for raw in [
@@ -930,6 +1104,160 @@ mod tests {
         assert_eq!(normalize_rfc_message_id("   "), None);
         assert_eq!(normalize_rfc_message_id("<>"), None);
         assert_eq!(normalize_rfc_message_id(" < > "), None);
+    }
+
+    // --- List-Unsubscribe parsing (issue #41) -------------------------------
+
+    #[test]
+    fn unsubscribe_https_only() {
+        let capture = parse_unsubscribe_headers(Some("<https://example.com/u?t=1>"), None).unwrap();
+        assert_eq!(
+            capture.https_url.as_deref(),
+            Some("https://example.com/u?t=1")
+        );
+        assert_eq!(capture.mailto, None);
+        assert!(!capture.one_click);
+    }
+
+    #[test]
+    fn unsubscribe_mailto_only() {
+        let capture =
+            parse_unsubscribe_headers(Some("<mailto:u@example.com?subject=stop>"), None).unwrap();
+        assert_eq!(capture.https_url, None);
+        assert_eq!(
+            capture.mailto.as_deref(),
+            Some("mailto:u@example.com?subject=stop")
+        );
+        assert!(!capture.one_click);
+    }
+
+    #[test]
+    fn unsubscribe_both_targets_first_of_each_wins() {
+        let capture = parse_unsubscribe_headers(
+            Some(
+                "<mailto:first@example.com>, <https://one.example/u>, \
+                 <mailto:second@example.com>, <https://two.example/u>",
+            ),
+            None,
+        )
+        .unwrap();
+        assert_eq!(capture.https_url.as_deref(), Some("https://one.example/u"));
+        assert_eq!(capture.mailto.as_deref(), Some("mailto:first@example.com"));
+    }
+
+    #[test]
+    fn unsubscribe_url_with_comma_survives_entry_splitting() {
+        let capture =
+            parse_unsubscribe_headers(Some("<https://example.com/u?ids=1,2,3>"), None).unwrap();
+        assert_eq!(
+            capture.https_url.as_deref(),
+            Some("https://example.com/u?ids=1,2,3")
+        );
+    }
+
+    #[test]
+    fn unsubscribe_one_click_requires_token_and_https() {
+        // Token present + https target: one-click.
+        let capture = parse_unsubscribe_headers(
+            Some("<https://example.com/u>"),
+            Some("List-Unsubscribe=One-Click"),
+        )
+        .unwrap();
+        assert!(capture.one_click);
+
+        // Token is matched case-insensitively.
+        let capture = parse_unsubscribe_headers(
+            Some("<https://example.com/u>"),
+            Some("LIST-UNSUBSCRIBE=ONE-CLICK"),
+        )
+        .unwrap();
+        assert!(capture.one_click);
+
+        // Post header without the exact token: not one-click.
+        let capture = parse_unsubscribe_headers(
+            Some("<https://example.com/u>"),
+            Some("List-Unsubscribe=Two-Clicks"),
+        )
+        .unwrap();
+        assert!(!capture.one_click);
+
+        // Token but no https target (RFC 8058 requires the POST to go to the
+        // https URL): not one-click.
+        let capture = parse_unsubscribe_headers(
+            Some("<mailto:u@example.com>"),
+            Some("List-Unsubscribe=One-Click"),
+        )
+        .unwrap();
+        assert!(!capture.one_click);
+    }
+
+    #[test]
+    fn unsubscribe_malformed_values_are_never_captured() {
+        // No header at all.
+        assert_eq!(parse_unsubscribe_headers(None, None), None);
+        assert_eq!(
+            parse_unsubscribe_headers(None, Some("List-Unsubscribe=One-Click")),
+            None
+        );
+        // No brackets, empty brackets, unclosed bracket, junk.
+        for raw in [
+            "",
+            "https://example.com/u",
+            "<>",
+            "< >",
+            "<https://example.com/u",
+            "just some text",
+            "<https://>",
+            "<mailto:>",
+        ] {
+            assert_eq!(parse_unsubscribe_headers(Some(raw), None), None, "{raw:?}");
+        }
+        // Hostile or wrong schemes are rejected.
+        for raw in [
+            "<javascript:alert(1)>",
+            "<http://example.com/u>",
+            "<data:text/html,hi>",
+            "<ftp://example.com/u>",
+            "<file:///etc/passwd>",
+        ] {
+            assert_eq!(parse_unsubscribe_headers(Some(raw), None), None, "{raw:?}");
+        }
+        // Embedded whitespace / control chars invalidate an entry (a URL
+        // corrupted by header folding lands here) — but a later valid entry
+        // is still taken.
+        let capture = parse_unsubscribe_headers(
+            Some("<https://examp le.com/u>, <https://ok.example/u>"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(capture.https_url.as_deref(), Some("https://ok.example/u"));
+        assert_eq!(
+            parse_unsubscribe_headers(Some("<https://example.com/\x01u>"), None),
+            None
+        );
+    }
+
+    #[test]
+    fn unsubscribe_overlong_entries_are_skipped() {
+        let long = format!("<https://example.com/{}>", "a".repeat(4096));
+        assert_eq!(parse_unsubscribe_headers(Some(&long), None), None);
+        // The over-long entry is skipped, not fatal: a following valid entry
+        // still wins.
+        let mixed = format!("{long}, <https://ok.example/u>");
+        let capture = parse_unsubscribe_headers(Some(&mixed), None).unwrap();
+        assert_eq!(capture.https_url.as_deref(), Some("https://ok.example/u"));
+    }
+
+    #[test]
+    fn unsubscribe_scheme_is_case_insensitive() {
+        let capture = parse_unsubscribe_headers(
+            Some("<HTTPS://Example.com/U>, <MAILTO:u@example.com>"),
+            None,
+        )
+        .unwrap();
+        // Entries are stored as-is; only the scheme match is case-insensitive.
+        assert_eq!(capture.https_url.as_deref(), Some("HTTPS://Example.com/U"));
+        assert_eq!(capture.mailto.as_deref(), Some("MAILTO:u@example.com"));
     }
 
     #[tokio::test]
@@ -1064,6 +1392,72 @@ mod tests {
             .try_get("mails_sent")
             .unwrap();
         assert_eq!(mails, 2);
+    }
+
+    /// The writer's unsubscribe upsert: one row per sender, latest message
+    /// wins wholesale (a later capture without a mailto clears the mailto).
+    #[tokio::test]
+    async fn db_writer_upserts_unsubscribe_latest_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = file_options(&dir.path().join("stats.db"));
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        migrate(&mut conn).await.unwrap();
+        let run_id = create_run(&mut conn, "mbox", None).await.unwrap();
+
+        let (tx, rx) = mpsc::channel(16);
+        let writer = tokio::spawn(db_writer(conn, rx, run_id));
+        tx.send(WriteMsg::Unsubscribe {
+            sender: "a@example.com".into(),
+            capture: UnsubscribeCapture {
+                https_url: Some("https://example.com/u?tok=old".into()),
+                mailto: Some("mailto:u@example.com".into()),
+                one_click: true,
+            },
+        })
+        .await
+        .unwrap();
+        tx.send(WriteMsg::Unsubscribe {
+            sender: "b@example.com".into(),
+            capture: UnsubscribeCapture {
+                https_url: None,
+                mailto: Some("mailto:stop@example.com".into()),
+                one_click: false,
+            },
+        })
+        .await
+        .unwrap();
+        tx.send(WriteMsg::Unsubscribe {
+            sender: "a@example.com".into(),
+            capture: UnsubscribeCapture {
+                https_url: Some("https://example.com/u?tok=new".into()),
+                mailto: None,
+                one_click: false,
+            },
+        })
+        .await
+        .unwrap();
+        drop(tx);
+        writer.await.unwrap().unwrap();
+
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        type UnsubRow = (String, Option<String>, Option<String>, i64, i64);
+        let rows: Vec<UnsubRow> = sqlx::query_as(
+            "SELECT sender, https_url, mailto, one_click, run_id \
+             FROM sender_unsubscribe ORDER BY sender",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "a@example.com");
+        assert_eq!(rows[0].1.as_deref(), Some("https://example.com/u?tok=new"));
+        assert_eq!(rows[0].2, None, "latest capture replaces the whole record");
+        assert_eq!(rows[0].3, 0);
+        assert_eq!(rows[0].4, run_id);
+        assert_eq!(rows[1].0, "b@example.com");
+        assert_eq!(rows[1].1, None);
+        assert_eq!(rows[1].2.as_deref(), Some("mailto:stop@example.com"));
+        assert_eq!(rows[1].3, 0);
     }
 
     #[tokio::test]
