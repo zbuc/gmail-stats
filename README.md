@@ -47,7 +47,10 @@ You'll need to make sure your OAuth Consent Screen is configured to have the fol
 * `https://www.googleapis.com/auth/gmail.readonly`
 * `https://www.googleapis.com/auth/gmail.metadata`
 
-As well as allowing the `redirect_uri` of `http://localhost`.
+As well as adding `http://localhost:8085` to the OAuth client's authorized
+redirect URIs. The consent redirect always uses that fixed port so the URI can
+be preconfigured; pick a different one with `--oauth-port <PORT>` (or
+`GMAIL_STATS_OAUTH_PORT`) and authorize `http://localhost:<PORT>` instead.
 
 After setting up your OAuth credentials, download the client secret file and save it as `credentials.json`.
 
