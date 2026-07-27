@@ -776,27 +776,37 @@ async fn run_scan(
         DEFAULT_AUTH_TIMEOUT_SECS,
     )?);
     let scopes = ["https://www.googleapis.com/auth/gmail.readonly"];
-    if let Err(e) = consent_within(auth.token(&scopes), auth_timeout).await {
-        drop(write_tx);
-        let _ = writer_handle.await;
-        let mut msg = format!("{e:#}");
-        if msg.contains("in use") {
-            msg.push_str(&format!(
-                " (the OAuth redirect listener wants localhost:{} — free the port, or pick \
-                 another with --oauth-port and add it to the OAuth client's redirect URIs)",
-                cfg.oauth_port
-            ));
+    match consent_within(auth.token(&scopes), auth_timeout, cancel.as_ref()).await {
+        Consent::Granted(_) => {}
+        Consent::Cancelled => {
+            drop(write_tx);
+            let _ = writer_handle.await;
+            ingest::finish_run(options, run_id, "cancelled", None, None).await?;
+            println!("scan cancelled before OAuth consent completed");
+            return Ok(());
         }
-        ingest::finish_run(
-            options,
-            run_id,
-            "failed",
-            Some(consent_error_kind(&msg)),
-            Some(&msg),
-        )
-        .await
-        .ok();
-        return Err(e);
+        Consent::Failed(e) => {
+            drop(write_tx);
+            let _ = writer_handle.await;
+            let mut msg = format!("{e:#}");
+            if msg.contains("in use") {
+                msg.push_str(&format!(
+                    " (the OAuth redirect listener wants localhost:{} — free the port, or pick \
+                     another with --oauth-port and add it to the OAuth client's redirect URIs)",
+                    cfg.oauth_port
+                ));
+            }
+            ingest::finish_run(
+                options,
+                run_id,
+                "failed",
+                Some(consent_error_kind(&msg)),
+                Some(&msg),
+            )
+            .await
+            .ok();
+            return Err(e);
+        }
     }
     // Tokens are in hand: leave awaiting_auth (a no-op when consent was never
     // needed — the row is already 'running').
@@ -1151,23 +1161,45 @@ async fn present_auth_url(
     }
 }
 
+/// Outcome of the up-front OAuth token acquisition.
+enum Consent<T> {
+    Granted(T),
+    /// The shutdown signal arrived while waiting at the consent prompt.
+    Cancelled,
+    Failed(anyhow::Error),
+}
+
 /// Bound an OAuth token acquisition so an unattended consent (nobody ever
-/// opens the URL) becomes a clean failure instead of an eternal hang.
+/// opens the URL) becomes a clean failure instead of an eternal hang, and
+/// race it against the shutdown flag: the consent wait is the one place the
+/// ingester blocks without polling `cancel`, so without this a Ctrl-C at the
+/// prompt would sit out the whole auth timeout before exiting.
 async fn consent_within<T, E>(
     fut: impl std::future::Future<Output = Result<T, E>>,
     timeout: Duration,
-) -> anyhow::Result<T>
+    cancel: &AtomicBool,
+) -> Consent<T>
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    match tokio::time::timeout(timeout, fut).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => Err(anyhow::Error::new(e).context("acquiring an OAuth token")),
-        Err(_) => anyhow::bail!(
-            "OAuth consent was not completed within {}s \
-             (set GMAIL_STATS_AUTH_TIMEOUT to adjust)",
-            timeout.as_secs()
-        ),
+    let cancelled = async {
+        while !cancel.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    };
+    tokio::select! {
+        r = tokio::time::timeout(timeout, fut) => match r {
+            Ok(Ok(value)) => Consent::Granted(value),
+            Ok(Err(e)) => {
+                Consent::Failed(anyhow::Error::new(e).context("acquiring an OAuth token"))
+            }
+            Err(_) => Consent::Failed(anyhow::anyhow!(
+                "OAuth consent was not completed within {}s \
+                 (set GMAIL_STATS_AUTH_TIMEOUT to adjust)",
+                timeout.as_secs()
+            )),
+        },
+        _ = cancelled => Consent::Cancelled,
     }
 }
 
@@ -1666,19 +1698,28 @@ async fn run_backfill(
         DEFAULT_AUTH_TIMEOUT_SECS,
     )?);
     let scopes = ["https://www.googleapis.com/auth/gmail.readonly"];
-    if let Err(e) = consent_within(auth.token(&scopes), auth_timeout).await {
-        drop(writer_conn);
-        let msg = format!("{e:#}");
-        ingest::finish_run(
-            options,
-            run_id,
-            "failed",
-            Some(consent_error_kind(&msg)),
-            Some(&msg),
-        )
-        .await
-        .ok();
-        return Err(e);
+    match consent_within(auth.token(&scopes), auth_timeout, cancel.as_ref()).await {
+        Consent::Granted(_) => {}
+        Consent::Cancelled => {
+            drop(writer_conn);
+            ingest::finish_run(options, run_id, "cancelled", None, None).await?;
+            println!("backfill cancelled before OAuth consent completed");
+            return Ok(());
+        }
+        Consent::Failed(e) => {
+            drop(writer_conn);
+            let msg = format!("{e:#}");
+            ingest::finish_run(
+                options,
+                run_id,
+                "failed",
+                Some(consent_error_kind(&msg)),
+                Some(&msg),
+            )
+            .await
+            .ok();
+            return Err(e);
+        }
     }
     let hub = Gmail::new(
         hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(
@@ -2622,18 +2663,47 @@ mod tests {
     /// an error after the timeout, and its kind must map to auth_required.
     #[tokio::test]
     async fn consent_timeout_becomes_auth_required() {
-        let err = consent_within(
+        let never = AtomicBool::new(false);
+        let outcome = consent_within(
             std::future::pending::<Result<(), std::io::Error>>(),
             Duration::from_millis(50),
+            &never,
         )
-        .await
-        .unwrap_err();
+        .await;
+        let Consent::Failed(err) = outcome else {
+            panic!("expected a timeout failure");
+        };
         let msg = format!("{err:#}");
         assert!(msg.contains("consent was not completed"), "got: {msg}");
         assert_eq!(consent_error_kind(&msg), "auth_required");
         assert_eq!(
             consent_error_kind("Error 400: policy_enforced"),
             "policy_enforced"
+        );
+    }
+
+    /// Ctrl-C while sitting at the consent prompt must cancel promptly — not
+    /// block out the remainder of the (here: 60s) auth timeout.
+    #[tokio::test]
+    async fn consent_cancelled_by_shutdown_flag_returns_promptly() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let flip = flag.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            flip.store(true, Ordering::Relaxed);
+        });
+        let start = std::time::Instant::now();
+        let outcome = consent_within(
+            std::future::pending::<Result<(), std::io::Error>>(),
+            Duration::from_secs(60),
+            flag.as_ref(),
+        )
+        .await;
+        assert!(matches!(outcome, Consent::Cancelled));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "cancellation took {:?}",
+            start.elapsed()
         );
     }
 
