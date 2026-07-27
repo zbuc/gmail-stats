@@ -5,9 +5,10 @@
 //! * **Bounded memory**: the file is read through a `BufRead` one line at a
 //!   time into a single reusable buffer. Lines longer than [`MAX_LINE_BYTES`]
 //!   are truncated in memory but always fully consumed from the stream, so
-//!   message framing survives pathological input. Only the three headers the
-//!   importer needs (`From`, `Return-Path`, `Message-ID`) are retained, each
-//!   capped at [`MAX_HEADER_VALUE_BYTES`] after unfolding.
+//!   message framing survives pathological input. Only the handful of headers
+//!   the importer needs (`From`, `Return-Path`, `Message-ID`,
+//!   `List-Unsubscribe`, `List-Unsubscribe-Post`) are retained, each capped at
+//!   [`MAX_HEADER_VALUE_BYTES`] after unfolding.
 //! * **Header-only**: bodies are skipped line-by-line without interpretation.
 //! * **mboxrd `>From ` escaping**: Takeout escapes body lines that would look
 //!   like separators as `>From `; such lines do not match the `From ` prefix
@@ -39,6 +40,12 @@ pub struct RawMessage {
     pub message_id: Option<String>,
     pub from: Option<String>,
     pub return_path: Option<String>,
+    /// Raw (unfolded, capped) `List-Unsubscribe` header value, if any. The
+    /// value is attacker-controlled; interpretation (bracket splitting, strict
+    /// scheme validation) happens in `ingest::parse_unsubscribe_headers`.
+    pub list_unsubscribe: Option<String>,
+    /// Raw `List-Unsubscribe-Post` header value, if any (RFC 8058).
+    pub list_unsubscribe_post: Option<String>,
     /// Absolute offset of the first byte after this message: the start of the
     /// next message's `From ` separator line, or EOF. Once every message up to
     /// here has been committed, this is a safe byte offset to resume from.
@@ -50,6 +57,8 @@ enum Interest {
     From,
     ReturnPath,
     MessageId,
+    ListUnsubscribe,
+    ListUnsubscribePost,
 }
 
 /// The header currently being accumulated (headers may be folded over
@@ -111,6 +120,8 @@ impl<R: BufRead> MboxReader<R> {
                 message_id: None,
                 from: None,
                 return_path: None,
+                list_unsubscribe: None,
+                list_unsubscribe_post: None,
                 end_offset: 0,
             };
             let mut current = Current::None;
@@ -259,6 +270,8 @@ fn commit(current: &mut Current, msg: &mut RawMessage) {
             Interest::From => &mut msg.from,
             Interest::ReturnPath => &mut msg.return_path,
             Interest::MessageId => &mut msg.message_id,
+            Interest::ListUnsubscribe => &mut msg.list_unsubscribe,
+            Interest::ListUnsubscribePost => &mut msg.list_unsubscribe_post,
         };
         // First occurrence wins; empty values are as good as absent.
         if slot.is_none() && !value.is_empty() {
@@ -274,6 +287,10 @@ fn interest_for(name: &[u8]) -> Option<Interest> {
         Some(Interest::ReturnPath)
     } else if name.eq_ignore_ascii_case(b"message-id") {
         Some(Interest::MessageId)
+    } else if name.eq_ignore_ascii_case(b"list-unsubscribe") {
+        Some(Interest::ListUnsubscribe)
+    } else if name.eq_ignore_ascii_case(b"list-unsubscribe-post") {
+        Some(Interest::ListUnsubscribePost)
     } else {
         None
     }
@@ -474,6 +491,68 @@ mod tests {
         assert_eq!(
             msgs[0].message_id.as_deref(),
             Some("<folded-id@example.com>")
+        );
+    }
+
+    #[test]
+    fn list_unsubscribe_headers_are_retained_raw() {
+        let data = "From a@example.com Thu Jan  1 00:00:00 2020\n\
+            From: a@example.com\n\
+            Message-ID: <m1@example.com>\n\
+            List-Unsubscribe: <mailto:u@example.com>, <https://example.com/u?t=1>\n\
+            List-Unsubscribe-Post: List-Unsubscribe=One-Click\n\
+            \n\
+            body\n";
+        let (msgs, skipped) = read_all(data.as_bytes());
+        assert_eq!(skipped, 0);
+        assert_eq!(
+            msgs[0].list_unsubscribe.as_deref(),
+            Some("<mailto:u@example.com>, <https://example.com/u?t=1>")
+        );
+        assert_eq!(
+            msgs[0].list_unsubscribe_post.as_deref(),
+            Some("List-Unsubscribe=One-Click")
+        );
+    }
+
+    #[test]
+    fn list_unsubscribe_absent_and_case_insensitive() {
+        let data = "From a@example.com Thu Jan  1 00:00:00 2020\n\
+            Message-ID: <m1@example.com>\n\
+            \n\
+            body\n\
+            From b@example.com Thu Jan  1 00:00:00 2020\n\
+            Message-ID: <m2@example.com>\n\
+            LIST-UNSUBSCRIBE: <https://example.com/u>\n\
+            list-unsubscribe-post: List-Unsubscribe=One-Click\n\
+            \n\
+            body\n";
+        let (msgs, _) = read_all(data.as_bytes());
+        assert_eq!(msgs[0].list_unsubscribe, None);
+        assert_eq!(msgs[0].list_unsubscribe_post, None);
+        assert_eq!(
+            msgs[1].list_unsubscribe.as_deref(),
+            Some("<https://example.com/u>")
+        );
+        assert_eq!(
+            msgs[1].list_unsubscribe_post.as_deref(),
+            Some("List-Unsubscribe=One-Click")
+        );
+    }
+
+    #[test]
+    fn folded_list_unsubscribe_is_unfolded() {
+        let data = "From a@example.com Thu Jan  1 00:00:00 2020\n\
+            Message-ID: <m1@example.com>\n\
+            List-Unsubscribe: <mailto:u@example.com>,\n\
+            \x20<https://example.com/unsubscribe?token=abc>\n\
+            \n\
+            body\n";
+        let (msgs, skipped) = read_all(data.as_bytes());
+        assert_eq!(skipped, 0);
+        assert_eq!(
+            msgs[0].list_unsubscribe.as_deref(),
+            Some("<mailto:u@example.com>, <https://example.com/unsubscribe?token=abc>")
         );
     }
 

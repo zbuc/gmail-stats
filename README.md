@@ -112,6 +112,29 @@ Resume validates that the file hasn't changed (size, mtime, content
 fingerprint); if it has, it safely falls back to re-parsing from the start,
 which stays correct thanks to the dedupe.
 
+## Unsubscribing from senders
+
+The mbox importer also captures each message's `List-Unsubscribe` /
+`List-Unsubscribe-Post` headers (RFC 2369 / RFC 8058) and stores the latest
+valid targets per sender — unsubscribe URLs embed per-recipient tokens, so the
+newest message's link is the one most likely to still work. Re-running an
+import over an existing database back-populates this data without changing
+any counts. (Capture during live API scans is planned as a follow-up; until
+then, scanned-only senders won't show the affordance.)
+
+In the web viewer, senders with captured data get an **Unsubscribe** control
+on their row: a one-click (RFC 8058) sender gets a button that sends the
+standard unsubscribe POST from your browser, others get a plain link to the
+sender's unsubscribe page or a `mailto:` link. Only `https:` and `mailto:`
+targets are ever actionable — anything else is shown as inert text — and the
+viewer process itself never contacts any unsubscribe URL; every action is an
+explicit click in your browser behind a confirmation naming the exact target.
+
+**Caveat:** using any unsubscribe mechanism confirms to the sender that your
+address is live and read. For legitimate newsletters that's fine; for spam or
+senders you don't trust, prefer hiding the sender in the viewer or filtering
+in Gmail instead of unsubscribing.
+
 ## Repairing cross-source duplicates
 
 The scan and the import key `seen_mails` differently (Gmail's internal id vs.

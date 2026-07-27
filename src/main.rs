@@ -585,6 +585,26 @@ fn parse_and_send(
         let Some(msg) = msg else { break };
         messages_seen += 1;
         committed_offset = msg.end_offset;
+        // Same sender priority (From, then Return-Path) and cleanup as the
+        // API scan, so counts are consistent across sources.
+        let sender = cleanup_sender(pick_sender(msg.from.as_deref(), msg.return_path.as_deref()));
+        // List-Unsubscribe capture (issue #41) applies to *every* parsed
+        // message — including ones the writer skips as seen-duplicates and
+        // ones without a Message-ID — so a re-import of an already-ingested
+        // mbox back-populates the table with zero count changes. Latest
+        // message wins in the writer's upsert; malformed values yield None
+        // and leave any earlier capture alone.
+        if let Some(capture) = ingest::parse_unsubscribe_headers(
+            msg.list_unsubscribe.as_deref(),
+            msg.list_unsubscribe_post.as_deref(),
+        ) {
+            write_tx
+                .blocking_send(WriteMsg::Unsubscribe {
+                    sender: sender.clone(),
+                    capture,
+                })
+                .map_err(|_| anyhow::anyhow!("DB writer task closed unexpectedly"))?;
+        }
         match msg.message_id {
             None => {
                 missing_id += 1;
@@ -596,10 +616,6 @@ fn parse_and_send(
                 }
             }
             Some(mid) => {
-                // Same sender priority (From, then Return-Path) and cleanup as
-                // the API scan, so counts are consistent across sources.
-                let sender =
-                    cleanup_sender(pick_sender(msg.from.as_deref(), msg.return_path.as_deref()));
                 if verbose() {
                     println!("sender: {:?}", sender);
                 }
@@ -2432,6 +2448,132 @@ mod tests {
         .try_get("ct")
         .unwrap();
         assert_eq!(done, 2);
+    }
+
+    /// List-Unsubscribe capture fixture (issue #41): Alice sends two messages
+    /// whose unsubscribe targets differ (latest must win), Bob is
+    /// mailto-only with one-click on the *second* Alice message absent, Carol
+    /// has no unsubscribe headers, Dave has capture-worthy headers but no
+    /// Message-ID (counted as skipped, still captured), and Eve's header is
+    /// hostile (never captured).
+    const UNSUB_FIXTURE: &str = "From x Thu Jan  1 00:00:00 2020\n\
+        From: Alice <a@example.com>\n\
+        Message-ID: <u1@example.com>\n\
+        List-Unsubscribe: <mailto:stop@example.com>, <https://news.example/u?tok=old>\n\
+        List-Unsubscribe-Post: List-Unsubscribe=One-Click\n\
+        \n\
+        body\n\
+        From x Thu Jan  1 00:00:00 2020\n\
+        From: Alice <a@example.com>\n\
+        Message-ID: <u2@example.com>\n\
+        List-Unsubscribe: <https://news.example/u?tok=new>\n\
+        \n\
+        body\n\
+        From x Thu Jan  1 00:00:00 2020\n\
+        From: Bob <b@example.com>\n\
+        Message-ID: <u3@example.com>\n\
+        List-Unsubscribe: <mailto:leave@example.com?subject=unsubscribe>\n\
+        \n\
+        body\n\
+        From x Thu Jan  1 00:00:00 2020\n\
+        From: Carol <c@example.com>\n\
+        Message-ID: <u4@example.com>\n\
+        \n\
+        body\n\
+        From x Thu Jan  1 00:00:00 2020\n\
+        From: Dave <d@example.com>\n\
+        List-Unsubscribe: <https://dave.example/u>\n\
+        List-Unsubscribe-Post: List-Unsubscribe=One-Click\n\
+        \n\
+        body\n\
+        From x Thu Jan  1 00:00:00 2020\n\
+        From: Eve <e@example.com>\n\
+        Message-ID: <u5@example.com>\n\
+        List-Unsubscribe: <javascript:alert(1)>, <http://evil.example/u>\n\
+        \n\
+        body\n";
+
+    async fn unsubscribe_rows(
+        options: &SqliteConnectOptions,
+    ) -> Vec<(String, Option<String>, Option<String>, i64)> {
+        let mut conn = SqliteConnection::connect_with(options).await.unwrap();
+        sqlx::query_as(
+            "SELECT sender, https_url, mailto, one_click \
+             FROM sender_unsubscribe ORDER BY sender",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap()
+    }
+
+    fn assert_unsub_fixture_rows(rows: &[(String, Option<String>, Option<String>, i64)]) {
+        assert_eq!(
+            rows.len(),
+            3,
+            "only senders with valid captures get rows: {rows:?}"
+        );
+        // Alice: her *second* message wins wholesale — new token, no mailto,
+        // and no one-click (that message had no Post header).
+        assert_eq!(rows[0].0, "a@example.com");
+        assert_eq!(rows[0].1.as_deref(), Some("https://news.example/u?tok=new"));
+        assert_eq!(rows[0].2, None);
+        assert_eq!(rows[0].3, 0);
+        // Bob: mailto only, never one-click without an https target.
+        assert_eq!(rows[1].0, "b@example.com");
+        assert_eq!(rows[1].1, None);
+        assert_eq!(
+            rows[1].2.as_deref(),
+            Some("mailto:leave@example.com?subject=unsubscribe")
+        );
+        assert_eq!(rows[1].3, 0);
+        // Dave: captured despite having no Message-ID (his message is skipped
+        // for counting but still parsed).
+        assert_eq!(rows[2].0, "d@example.com");
+        assert_eq!(rows[2].1.as_deref(), Some("https://dave.example/u"));
+        assert_eq!(rows[2].3, 1);
+    }
+
+    /// The full unsubscribe capture loop plus the back-populate property: a
+    /// re-import over a database that already counted every message (but has
+    /// no unsubscribe data, like one built by a pre-#41 binary) adds zero
+    /// counts yet fills sender_unsubscribe.
+    #[tokio::test]
+    async fn import_captures_unsubscribe_and_reimport_back_populates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mbox = dir.path().join("mail.mbox");
+        std::fs::write(&mbox, UNSUB_FIXTURE).unwrap();
+        let options = db_connect_options(&dir.path().join("stats.db"));
+
+        let conn = migrated_conn(&options).await;
+        let s1 = run_import(&options, conn, &mbox, None, unset_cancel())
+            .await
+            .unwrap();
+        assert_eq!(s1.messages_seen, 6);
+        assert_eq!(s1.messages_new, 5, "Dave has no Message-ID");
+        assert_eq!(s1.skipped, 1);
+        assert_unsub_fixture_rows(&unsubscribe_rows(&options).await);
+
+        // Simulate a database whose counts predate unsubscribe capture: the
+        // messages are all seen, but sender_unsubscribe is empty.
+        let mut conn = SqliteConnection::connect_with(&options).await.unwrap();
+        sqlx::query("DELETE FROM sender_unsubscribe")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.ok();
+
+        // Re-import: every message is a seen-duplicate (zero count changes),
+        // yet capture happens for all of them — the table is back-populated.
+        let conn = migrated_conn(&options).await;
+        let s2 = run_import(&options, conn, &mbox, None, unset_cancel())
+            .await
+            .unwrap();
+        assert_eq!(s2.messages_seen, 6);
+        assert_eq!(s2.messages_new, 0, "re-import must add zero new counts");
+        assert_eq!(sender_count(&options, "a@example.com").await, Some(2));
+        assert_eq!(sender_count(&options, "b@example.com").await, Some(1));
+        assert_eq!(sender_count(&options, "c@example.com").await, Some(1));
+        assert_unsub_fixture_rows(&unsubscribe_rows(&options).await);
     }
 
     /// Insert a half-finished import run row the way a cancelled run leaves it.

@@ -98,6 +98,119 @@ function showError(message) {
   showView("error");
 }
 
+// --- unsubscribe affordance (issue #41) -------------------------------------
+//
+// Unsubscribe targets come straight from senders' List-Unsubscribe headers:
+// attacker-controlled, so the same discipline as auth_url applies. Only
+// https:/mailto: ever become actionable; anything else renders as inert text.
+// The viewer process never touches these URLs — every action is an explicit
+// click in the browser, behind a confirm dialog that names the exact target
+// and warns that unsubscribing confirms a live address to the sender.
+
+/// Strict scheme gate: returns the URL when it parses and carries exactly the
+/// expected scheme (URL() lowercases the protocol), else null.
+function validUnsubscribeTarget(url, scheme) {
+  if (typeof url !== "string") return null;
+  try {
+    return new URL(url).protocol === scheme ? url : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function unsubscribeWarning(action) {
+  return (
+    `${action}\n\n` +
+    "Unsubscribing tells this sender your address is live. If you don't " +
+    "trust them, hiding the sender here (or filtering in Gmail) is the " +
+    "safer choice."
+  );
+}
+
+/// RFC 8058 one-click: a browser-generated top-level form POST to the https
+/// URL with body `List-Unsubscribe=One-Click`. Top-level form navigation is
+/// CSP-compatible (no form-action directive is set) and involves no CORS.
+function submitOneClickUnsubscribe(url) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = url;
+  const field = document.createElement("input");
+  field.type = "hidden";
+  field.name = "List-Unsubscribe";
+  field.value = "One-Click";
+  form.appendChild(field);
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+}
+
+/// The per-row Unsubscribe control, or null when the row has no captured
+/// data. Order of preference mirrors capture: https (one-click POST or plain
+/// link), then mailto; a row whose targets all fail validation renders them
+/// as inert text instead.
+function unsubscribeControl(row) {
+  const unsub = row.unsubscribe;
+  if (!unsub || typeof unsub !== "object") return null;
+
+  const httpsUrl = validUnsubscribeTarget(unsub.url, "https:");
+  if (httpsUrl) {
+    const domain = new URL(httpsUrl).hostname;
+    if (unsub.one_click === true) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "unsub unsub-btn";
+      btn.textContent = "Unsubscribe";
+      btn.title = `One-click unsubscribe via ${domain}`;
+      btn.addEventListener("click", () => {
+        if (confirm(unsubscribeWarning(`Send a one-click unsubscribe request to ${domain}?`))) {
+          submitOneClickUnsubscribe(httpsUrl);
+        }
+      });
+      return btn;
+    }
+    const link = document.createElement("a");
+    link.href = httpsUrl;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.className = "unsub unsub-link";
+    link.textContent = "Unsubscribe";
+    link.title = `Open the unsubscribe page on ${domain}`;
+    link.addEventListener("click", event => {
+      if (!confirm(unsubscribeWarning(`Open this sender's unsubscribe page on ${domain}?`))) {
+        event.preventDefault();
+      }
+    });
+    return link;
+  }
+
+  const mailtoUrl = validUnsubscribeTarget(unsub.mailto, "mailto:");
+  if (mailtoUrl) {
+    // Display just the address part (before any ?subject=... query).
+    const address = mailtoUrl.slice("mailto:".length).split("?")[0];
+    const link = document.createElement("a");
+    link.href = mailtoUrl;
+    link.className = "unsub unsub-link";
+    link.textContent = "Unsubscribe";
+    link.title = `Unsubscribe by emailing ${address}`;
+    link.addEventListener("click", event => {
+      if (!confirm(unsubscribeWarning(`Open your mail client to email an unsubscribe request to ${address}?`))) {
+        event.preventDefault();
+      }
+    });
+    return link;
+  }
+
+  // Data exists but no target passed the scheme gate (hostile or corrupted):
+  // show it as inert text — same pattern as auth_url — never as a link.
+  const raw = unsub.url != null ? unsub.url : unsub.mailto;
+  if (raw == null) return null;
+  const inert = document.createElement("span");
+  inert.className = "unsub unsub-inert";
+  inert.textContent = String(raw);
+  inert.title = "Invalid unsubscribe target (shown as text for safety)";
+  return inert;
+}
+
 function senderRow(row, isHidden) {
   const tr = document.createElement("tr");
   if (isHidden) tr.className = "hidden-row";
@@ -112,6 +225,8 @@ function senderRow(row, isHidden) {
 
   const actionCell = document.createElement("td");
   actionCell.className = "act";
+  const unsub = unsubscribeControl(row);
+  if (unsub) actionCell.appendChild(unsub);
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "icon-btn";

@@ -18,6 +18,11 @@ Scenarios:
   auth_evil   any other auth_url renders as inert text (no link)
   mixed_unrepaired  mixed_sources: banner names the backfill command + count
   mixed_repaired    repaired database: no banner
+  unsubscribe unsubscribe affordance per sender row: one-click confirm names
+              the domain, https link is noopener-noreferrer, mailto links,
+              hostile schemes render inert, senders without data get nothing
+              (the demo scenario additionally proves the affordance is absent
+              when summary.json has no unsubscribe fields)
 
 Run:  python3 tests/frontend/harness.py
 Requires Google Chrome (path override: CHROME env var). Exits non-zero on any
@@ -108,6 +113,49 @@ SUMMARY = {
     "generated_at_unix": int(time.time()),
 }
 
+# Fabricated unsubscribe targets only (reserved example domains); the driver
+# stubs window.confirm to refuse, so nothing is ever actually requested.
+UNSUB_SUMMARY = {
+    "total_messages": 71,
+    "senders": [
+        {
+            "sender": "oneclick@example.com",
+            "mails_sent": 20,
+            "unsubscribe": {"url": "https://unsubscribe.example/oc?u=1", "one_click": True},
+        },
+        {
+            "sender": "link@example.com",
+            "mails_sent": 15,
+            "unsubscribe": {"url": "https://news.example/unsub", "one_click": False},
+        },
+        {
+            "sender": "mailto@example.com",
+            "mails_sent": 10,
+            "unsubscribe": {
+                "mailto": "mailto:leave@example.com?subject=unsubscribe",
+                "one_click": False,
+            },
+        },
+        {"sender": "plain@example.com", "mails_sent": 8},
+        {
+            "sender": "evil-js@example.com",
+            "mails_sent": 7,
+            "unsubscribe": {"url": "javascript:alert(1)", "one_click": True},
+        },
+        {
+            "sender": "evil-http@example.com",
+            "mails_sent": 6,
+            "unsubscribe": {"url": "http://insecure.example/unsub", "one_click": False},
+        },
+        {
+            "sender": "evil-data@example.com",
+            "mails_sent": 5,
+            "unsubscribe": {"mailto": "data:text/html,hi", "one_click": False},
+        },
+    ],
+    "generated_at_unix": int(time.time()),
+}
+
 SCENARIOS = {
     "launch": {
         "status": base_status(db="missing"),
@@ -150,6 +198,10 @@ SCENARIOS = {
     },
     "mixed_repaired": {
         "status": base_status(),
+    },
+    "unsubscribe": {
+        "status": base_status(),
+        "summary": UNSUB_SUMMARY,
     },
 }
 
@@ -199,7 +251,7 @@ def make_handler(name, scenario, captured):
                 if scenario.get("summary_missing"):
                     self.send_json({"error": "missing_db", "message": "no db"}, 503)
                 else:
-                    self.send_json(SUMMARY)
+                    self.send_json(scenario.get("summary", SUMMARY))
             elif path == "/api/runs":
                 self.send_json({"runs": [], "now_unix": int(time.time())})
             elif re.fullmatch(r"/api/runs/\d+/log", path):
@@ -324,6 +376,11 @@ def main():
             check(results["panelHidden"], "panel hidden", failures)
             check(results["historyHidden"], "history hidden", failures)
             check(len(captured) == 0, f"no mutating requests fired ({len(captured)})", failures)
+            check(
+                results["unsubControls"] == 0,
+                "no unsubscribe affordance without summary unsubscribe fields",
+                failures,
+            )
         elif name == "owns_false":
             check(results["cancelHidden"], "Cancel hidden for non-owned run", failures)
             check(results["logHidden"], "Log hidden for non-owned run", failures)
@@ -377,6 +434,72 @@ def main():
             )
         elif name == "mixed_repaired":
             check(results["bannerHidden"], "mixed banner absent when repaired", failures)
+        elif name == "unsubscribe":
+            oc = results["oneclick"]
+            check(oc["hasButton"], "one-click sender gets a button", failures)
+            check(not oc["hasLink"], "one-click sender gets no link", failures)
+            check(
+                bool(results["oneclickConfirm"]),
+                "clicking one-click asks for confirmation",
+                failures,
+            )
+            check(
+                "unsubscribe.example" in (results["oneclickConfirm"] or ""),
+                f"one-click confirm names the target domain ({results['oneclickConfirm']!r})",
+                failures,
+            )
+            check(
+                "live" in (results["oneclickConfirm"] or ""),
+                "confirm warns the address is confirmed live",
+                failures,
+            )
+            check(
+                "hiding" in (results["oneclickConfirm"] or ""),
+                "confirm points at hiding/filtering as the alternative",
+                failures,
+            )
+            link = results["link"]
+            check(link["hasLink"] and not link["hasButton"], "https-only sender gets a link", failures)
+            check(link["href"] == "https://news.example/unsub", "link href is the https URL", failures)
+            check(link["target"] == "_blank", "link target=_blank", failures)
+            check(link["rel"] == "noopener noreferrer", "link rel=noopener noreferrer", failures)
+            check(
+                "news.example" in (results["linkConfirm"] or ""),
+                f"link confirm names the target domain ({results['linkConfirm']!r})",
+                failures,
+            )
+            mailto = results["mailto"]
+            check(mailto["hasLink"], "mailto sender gets a link", failures)
+            check(
+                mailto["href"] == "mailto:leave@example.com?subject=unsubscribe",
+                f"mailto href intact ({mailto['href']!r})",
+                failures,
+            )
+            check(mailto["target"] is None, "mailto link has no target=_blank", failures)
+            plain = results["plain"]
+            check(
+                not plain["hasButton"] and not plain["hasLink"] and plain["inertText"] is None,
+                "sender without data gets no affordance",
+                failures,
+            )
+            for evil_key, evil_target in [
+                ("evilJs", "javascript:alert(1)"),
+                ("evilHttp", "http://insecure.example/unsub"),
+                ("evilData", "data:text/html,hi"),
+            ]:
+                evil = results[evil_key]
+                check(
+                    not evil["hasButton"] and not evil["hasLink"] and evil["anchors"] == 0,
+                    f"{evil_key}: hostile scheme renders no button/link",
+                    failures,
+                )
+                check(
+                    evil["inertText"] == evil_target,
+                    f"{evil_key}: hostile target shown as inert text ({evil['inertText']!r})",
+                    failures,
+                )
+            check(results["stillOnPage"], "refused confirms navigate nowhere", failures)
+            check(len(captured) == 0, "no POSTs fired (confirm was refused)", failures)
 
     print()
     if failures:
