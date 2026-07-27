@@ -78,8 +78,9 @@ async function run() {
       pillHidden: hidden("ingest-pill"),
       panelHidden: hidden("ingest-panel"),
       historyHidden: hidden("history"),
-      // Demo summary.json carries no unsubscribe fields, so the affordance
-      // must be absent everywhere.
+      // The demo ships simulated unsubscribe data (issue #44): the row-level
+      // affordance is summary-driven, so it renders even with no status
+      // endpoint.
       unsubControls: document.querySelectorAll(".unsub").length,
     });
     return;

@@ -163,6 +163,10 @@ SCENARIOS = {
     },
     "demo": {
         "status_404": True,
+        # The Pages demo ships simulated unsubscribe data (issue #44):
+        # row-level unsubscribe controls must render even with no status
+        # endpoint, while all ingestion UI stays hidden.
+        "summary": UNSUB_SUMMARY,
     },
     "owns_false": {
         "status": base_status(active_run=active_run(), ingest_lock_held=True),
@@ -377,8 +381,8 @@ def main():
             check(results["historyHidden"], "history hidden", failures)
             check(len(captured) == 0, f"no mutating requests fired ({len(captured)})", failures)
             check(
-                results["unsubControls"] == 0,
-                "no unsubscribe affordance without summary unsubscribe fields",
+                results["unsubControls"] > 0,
+                "unsubscribe affordances render from summary data even in demo mode",
                 failures,
             )
         elif name == "owns_false":

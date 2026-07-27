@@ -48,6 +48,47 @@ TAIL_RULES = {
 
 ALLOWED_SUFFIXES = (".example", "example.com", "example.net", "example.org")
 
+# Simulated List-Unsubscribe coverage per category (issue #44), tuned to how
+# each class of real-world sender behaves:
+# (P(has unsubscribe data), P(one-click | https target), P(mailto target)).
+# Humans never send List-Unsubscribe; gray mail skews to sketchy mailto-only.
+UNSUBSCRIBE_RULES = {
+    "retail_promo": (0.95, 0.70, 0.45),
+    "social": (0.90, 0.80, 0.25),
+    "newsletters": (0.95, 0.75, 0.55),
+    "alerts": (0.85, 0.60, 0.30),
+    "receipts": (0.25, 0.30, 0.30),
+    "finance": (0.30, 0.20, 0.35),
+    "platform": (0.60, 0.50, 0.25),
+    "forums_gaming": (0.80, 0.50, 0.40),
+    "travel": (0.85, 0.60, 0.30),
+    "gray_spam": (0.70, 0.15, 0.65),
+    "humans": (0.0, 0.0, 0.0),
+    "oneoff_tail": (0.30, 0.30, 0.40),
+}
+
+
+def unsubscribe_for(sender, category, rng):
+    """Fabricate {url, mailto, one_click} for a sender, or None. Targets live
+    on the sender's own reserved domain, so nothing a demo visitor clicks can
+    resolve anywhere real."""
+    p_present, p_one_click, p_mailto = UNSUBSCRIBE_RULES[category]
+    if rng.random() >= p_present:
+        return None
+    domain = sender.split("@", 1)[1]
+    has_mailto = rng.random() < p_mailto
+    has_https = (not has_mailto) or rng.random() < 0.85
+    unsub = {}
+    if has_https:
+        token = "".join(rng.choice("0123456789abcdef") for _ in range(16))
+        unsub["url"] = f"https://unsubscribe.{domain}/u/{token}"
+        unsub["one_click"] = rng.random() < p_one_click
+    else:
+        unsub["one_click"] = False
+    if has_mailto:
+        unsub["mailto"] = f"mailto:unsubscribe@{domain}?subject=unsubscribe"
+    return unsub
+
 
 def expand_brands(words):
     """pre:/suf: entries combine pairwise into brands; bare entries stand alone."""
@@ -144,7 +185,10 @@ def main():
         heroes_by_cat.setdefault(hero["category"], []).append(hero)
 
     used = {h["sender"] for h in SPEC.get("top_senders", [])}
-    rows = [(h["sender"], h["mails_sent"]) for h in SPEC.get("top_senders", [])]
+    rows = [
+        (h["sender"], h["mails_sent"], h["category"])
+        for h in SPEC.get("top_senders", [])
+    ]
 
     all_brand_words = [w for c in SPEC["categories"] for w in c.get("brand_words", [])
                       if not w.startswith(("first:", "last:"))]
@@ -169,27 +213,61 @@ def main():
                 addrs = brand_addresses(cat, n, rng, used, brand_pool=pool)
             else:
                 addrs = brand_addresses(cat, n, rng, used)
-            rows.extend(zip(addrs, counts))
+            rows.extend(
+                (addr, count, cat["key"]) for addr, count in zip(addrs, counts)
+            )
 
     # Validate against the spec's hard guarantees.
-    total = sum(c for _, c in rows)
+    total = sum(c for _, c, _ in rows)
     assert total == sum(c["total_messages"] for c in SPEC["categories"]), total
     assert total >= SPEC["total_messages_min"], total
     assert len(rows) == SPEC["distinct_senders"], len(rows)
-    assert len({a for a, _ in rows}) == len(rows), "duplicate sender address"
-    for addr, _ in rows:
+    assert len({a for a, _, _ in rows}) == len(rows), "duplicate sender address"
+    for addr, _, _ in rows:
         domain = addr.split("@", 1)[1]
         assert domain.endswith(ALLOWED_SUFFIXES), f"non-reserved domain: {addr}"
 
     rows.sort(key=lambda r: (-r[1], r[0]))
+
+    # Simulated List-Unsubscribe data (issue #44) from a SEPARATE seeded RNG so
+    # the sender/count stream above stays byte-identical to earlier versions.
+    urng = random.Random(f"{SPEC['seed']}-unsubscribe")
+    senders_out = []
+    unsub_count = 0
+    for addr, count, category in rows:
+        entry = {"sender": addr, "mails_sent": count}
+        unsub = unsubscribe_for(addr, category, urng)
+        if unsub is not None:
+            entry["unsubscribe"] = unsub
+            unsub_count += 1
+        senders_out.append(entry)
+
+    # Unsubscribe guarantees: reserved domains only, one-click implies an https
+    # target, humans never carry data.
+    for entry in senders_out:
+        unsub = entry.get("unsubscribe")
+        if unsub is None:
+            continue
+        if "url" in unsub:
+            host = unsub["url"].split("/")[2]
+            assert unsub["url"].startswith("https://unsubscribe."), unsub["url"]
+            assert host.endswith(ALLOWED_SUFFIXES), unsub["url"]
+        if unsub.get("one_click"):
+            assert "url" in unsub, f"one_click without https target: {entry['sender']}"
+    human_rows = {a for a, _, c in rows if c == "humans"}
+    assert not any(
+        e["sender"] in human_rows and "unsubscribe" in e for e in senders_out
+    ), "humans must not carry unsubscribe data"
+    assert unsub_count > 300, f"implausibly few unsubscribe records: {unsub_count}"
+
     summary = {
         "total_messages": total,
         "generated_at_unix": GENERATED_AT_UNIX,
-        "senders": [{"sender": a, "mails_sent": c} for a, c in rows],
+        "senders": senders_out,
     }
     (HERE / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     print(f"wrote summary.json: {len(rows)} senders, {total} messages, "
-          f"top = {rows[0][0]} ({rows[0][1]})")
+          f"top = {rows[0][0]} ({rows[0][1]}), {unsub_count} with unsubscribe data")
 
 
 if __name__ == "__main__":
