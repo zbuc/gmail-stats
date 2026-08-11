@@ -1,3 +1,5 @@
+
+
 # gmail-stats
 Generate stats on your GMail inbox and store in a SQLite database
 
@@ -183,6 +185,7 @@ gmail_stats scan --backfill [OPTIONS]  fetch Message-ID and List-Unsubscribe hea
 --db <PATH>            SQLite database path        [env: GMAIL_STATS_DB] [default: stats.db]
 --credentials <PATH>   OAuth client secret (scan)  [env: GMAIL_STATS_CREDENTIALS] [default: credentials.json]
 --tokens <PATH>        OAuth token cache (scan)    [env: GMAIL_STATS_TOKENS] [default: tokencache.json]
+--oauth-port <PORT>    OAuth redirect port          [env: GMAIL_STATS_OAUTH_PORT] [default: 8085]
 --resume <RUN_ID>      import only: resume from the recorded byte offset
 --quiet                only errors and the final summary
 --verbose              per-message detail (prints every sender)
